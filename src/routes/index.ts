@@ -25,6 +25,7 @@ import movieRoutes from './movie';
 import audioRoutes from './audio';
 import audioArtistsRoutes from './audioArtists';
 import audioAlbumsRoutes from './audioAlbums';
+import mobileRoutes from './mobile';
 import videoMusicRoutes from './videoMusic';
 import relatedRoutes from './related';
 import adminUsersRoutes from './adminUsers';
@@ -91,6 +92,7 @@ const router: FastifyPluginAsync = async (fastify) => {
   fastify.register(audioRoutes, { prefix: '/audio' });
   fastify.register(audioArtistsRoutes, { prefix: '/audio-artists' });
   fastify.register(audioAlbumsRoutes, { prefix: '/audio-albums' });
+  fastify.register(mobileRoutes, { prefix: '/api' });
   fastify.register(videoMusicRoutes, { prefix: '/video-music' });
   fastify.register(adminUsersRoutes, { prefix: '/admin-users' });
 
