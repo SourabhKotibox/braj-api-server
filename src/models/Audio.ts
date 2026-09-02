@@ -3,7 +3,9 @@ import mongoose, { Document, Schema } from 'mongoose';
 export interface IAudio extends Document {
   title: string;
   artist: string;
+  artistId?: mongoose.Types.ObjectId;
   album?: string;
+  albumId?: mongoose.Types.ObjectId;
   description?: string;
   shortDescription?: string;
   thumbnail?: string;
@@ -47,7 +49,9 @@ const AudioSchema = new Schema<IAudio>(
   {
     title: { type: String, required: true, index: true },
     artist: { type: String, required: true, index: true },
+    artistId: { type: Schema.Types.ObjectId, ref: 'AudioArtist' },
     album: String,
+    albumId: { type: Schema.Types.ObjectId, ref: 'AudioAlbum' },
     description: String,
     shortDescription: String,
     thumbnail: String,

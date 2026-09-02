@@ -67,18 +67,24 @@ const musicApiRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(404).send({ success: false, error: 'Song not found' });
       }
 
-      // Increment views
+      // Increment views (fire and forget)
       AudioModel.findByIdAndUpdate(id, { $inc: { views: 1 } }).exec();
 
-      // Get related songs
-      const related = await AudioModel.find({
+      // Build filter for related songs — use raw genre id before populate
+      const relatedFilter: any = {
         status: 'published',
         _id: { $ne: song._id },
-        $or: [
-          ...(song.artist ? [{ artist: song.artist }] : []),
-          ...(song.genre ? [{ genre: song.genre }] : []),
-        ],
-      })
+        $or: [] as any[],
+      };
+      if (song.artist) relatedFilter.$or.push({ artist: song.artist });
+      // genre may be populated object or ObjectId
+      const genreId = (song.genre as any)?._id || song.genre;
+      if (genreId) relatedFilter.$or.push({ genre: genreId });
+      const relatedQuery = relatedFilter.$or.length > 0
+        ? relatedFilter
+        : { status: 'published', _id: { $ne: song._id } };
+
+      const related = await AudioModel.find(relatedQuery)
         .sort({ views: -1 })
         .limit(10)
         .lean();
@@ -249,7 +255,11 @@ const musicApiRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.status(404).send({ success: false, error: 'Artist not found' });
       }
 
-      const songs = await AudioModel.find({ artistId: id, status: 'published' })
+      // Songs that reference this artist by artistId OR by artist name string
+      const songs = await AudioModel.find({
+        status: 'published',
+        $or: [{ artistId: id }, { artist: artist.name }],
+      })
         .sort({ views: -1 })
         .lean();
 
@@ -499,25 +509,47 @@ const musicApiRoutes: FastifyPluginAsync = async (fastify) => {
 
 // ─── Helper Functions ─────────────────────────────────────────────────
 function formatSong(song: any) {
+  // genre can be a populated object { _id, name } or a raw ObjectId
+  const genreObj = song.genre && typeof song.genre === 'object' && !Array.isArray(song.genre)
+    ? song.genre
+    : null;
+  // artistId can be a populated object { _id, name, image } or a raw ObjectId
+  const artistObj = song.artistId && typeof song.artistId === 'object' && song.artistId.name
+    ? song.artistId
+    : null;
+  // albumId can be a populated object { _id, name, image } or a raw ObjectId
+  const albumObj = song.albumId && typeof song.albumId === 'object' && song.albumId.name
+    ? song.albumId
+    : null;
+
   return {
     id: song._id?.toString() || song.id,
     title: song.title,
     artist: song.artist,
-    artistId: song.artistId?._id?.toString() || song.artistId,
-    artistName: song.artistId?.name || song.artist,
+    artistId: artistObj?._id?.toString() || (song.artistId ? song.artistId.toString() : null),
+    artistName: artistObj?.name || song.artist,
+    artistImage: artistObj?.image || null,
     album: song.album,
-    albumId: song.albumId?._id?.toString() || song.albumId,
-    thumbnail: song.thumbnail,
-    duration: song.duration,
+    albumId: albumObj?._id?.toString() || (song.albumId ? song.albumId.toString() : null),
+    albumName: albumObj?.name || song.album || null,
+    genre: genreObj?.name || null,
+    genreId: genreObj?._id?.toString() || (song.genre ? song.genre.toString() : null),
+    thumbnail: song.thumbnail || null,
+    coverImage: song.coverImage || null,
+    duration: song.duration || 0,
     views: song.views || 0,
     likes: song.likes || 0,
+    shares: song.shares || 0,
     trending: song.trending || false,
     featured: song.featured || false,
     isNew: song.isNewContent || false,
-    audioUrl: song.audioQualities?.[0]?.url || song.audioUrl,
-    hlsUrl: song.hlsUrl,
+    isExclusive: song.isExclusive || false,
+    downloadAllowed: song.downloadAllowed !== undefined ? song.downloadAllowed : true,
+    audioUrl: song.audioQualities?.[0]?.url || song.audioUrl || null,
+    hlsUrl: song.hlsUrl || null,
     planRequired: song.planRequired || 'free',
     createdAt: song.createdAt,
+    updatedAt: song.updatedAt,
   };
 }
 
