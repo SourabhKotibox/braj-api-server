@@ -35,21 +35,24 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
+var rbac_1 = require("../middlewares/rbac");
+var notificationTemplateController_1 = require("../controllers/notificationTemplateController");
+var notificationTemplates = function (fastify) { return __awaiter(void 0, void 0, void 0, function () {
     return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
-            case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
-        }
+        // Get all notification templates
+        fastify.get('/', { onRequest: [(0, rbac_1.requirePermission)('notificationTemplates', 'canView')] }, notificationTemplateController_1.listNotificationTemplates);
+        // Get single notification template
+        fastify.get('/item/:templateId', { onRequest: [(0, rbac_1.requirePermission)('notificationTemplates', 'canView')] }, notificationTemplateController_1.getNotificationTemplateById);
+        // Create notification template
+        fastify.post('/', { onRequest: [(0, rbac_1.requirePermission)('notificationTemplates', 'canCreate')] }, notificationTemplateController_1.createNotificationTemplate);
+        // Update notification template
+        fastify.put('/item/:templateId', { onRequest: [(0, rbac_1.requirePermission)('notificationTemplates', 'canEdit')] }, notificationTemplateController_1.updateNotificationTemplate);
+        // Toggle notification template status
+        fastify.patch('/item/:templateId/toggle-status', { onRequest: [(0, rbac_1.requirePermission)('notificationTemplates', 'canEdit')] }, notificationTemplateController_1.toggleNotificationTemplateStatus);
+        // Delete notification template
+        fastify.delete('/item/:templateId', { onRequest: [(0, rbac_1.requirePermission)('notificationTemplates', 'canDelete')] }, notificationTemplateController_1.deleteNotificationTemplate);
+        return [2 /*return*/];
     });
 }); };
-start();
+exports.default = notificationTemplates;

@@ -35,21 +35,23 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
-    return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
-            case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
-        }
+exports.default = reviewRoutes;
+var reviewController_1 = require("../controllers/reviewController");
+var rbac_1 = require("../middlewares/rbac");
+var auth_1 = require("../middlewares/auth");
+function reviewRoutes(fastify) {
+    return __awaiter(this, void 0, void 0, function () {
+        return __generator(this, function (_a) {
+            // Admin Routes
+            fastify.get('/admin/reviews', { onRequest: [(0, rbac_1.requirePermission)('reviews', 'canView')] }, reviewController_1.getReviewsAdmin);
+            fastify.put('/admin/reviews/:id/status', { onRequest: [(0, rbac_1.requirePermission)('reviews', 'canEdit')] }, reviewController_1.updateReviewStatus);
+            fastify.delete('/admin/reviews/:id', { onRequest: [(0, rbac_1.requirePermission)('reviews', 'canDelete')] }, reviewController_1.deleteReviewAdmin);
+            // App / Frontend Routes
+            fastify.get('/app/reviews', reviewController_1.getReviewsApp);
+            fastify.post('/app/reviews', { onRequest: [auth_1.authenticate] }, reviewController_1.createReviewApp);
+            fastify.delete('/app/reviews/:id', { onRequest: [auth_1.authenticate] }, reviewController_1.deleteReviewApp);
+            return [2 /*return*/];
+        });
     });
-}); };
-start();
+}

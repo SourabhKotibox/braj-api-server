@@ -35,21 +35,41 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
-    return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
-            case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
-        }
+exports.authenticate = authenticate;
+var User_1 = require("../models/User");
+function authenticate(request, reply) {
+    return __awaiter(this, void 0, void 0, function () {
+        var userId, role, user, _a;
+        var _b, _c;
+        return __generator(this, function (_d) {
+            switch (_d.label) {
+                case 0:
+                    _d.trys.push([0, 4, , 5]);
+                    return [4 /*yield*/, request.jwtVerify()];
+                case 1:
+                    _d.sent();
+                    userId = (_b = request.user) === null || _b === void 0 ? void 0 : _b.id;
+                    role = (_c = request.user) === null || _c === void 0 ? void 0 : _c.role;
+                    if (!(userId && role === 'user')) return [3 /*break*/, 3];
+                    return [4 /*yield*/, User_1.UserModel.findById(userId).select('status banReason').lean()];
+                case 2:
+                    user = _d.sent();
+                    if (!user) {
+                        return [2 /*return*/, reply.status(401).send({ error: 'Unauthorized — user not found' })];
+                    }
+                    if (user.status === 'banned' || user.status === 'suspended') {
+                        return [2 /*return*/, reply.status(403).send({
+                                error: user.banReason ? "Account suspended: ".concat(user.banReason) : 'Account suspended.'
+                            })];
+                    }
+                    _d.label = 3;
+                case 3: return [3 /*break*/, 5];
+                case 4:
+                    _a = _d.sent();
+                    return [2 /*return*/, reply.status(401).send({ error: 'Unauthorized — valid Bearer token required' })];
+                case 5: return [2 /*return*/];
+            }
+        });
     });
-}); };
-start();
+}

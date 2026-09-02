@@ -35,21 +35,35 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
+var appProfileController_1 = require("../controllers/appProfileController");
+var appProfileRoutes = function (fastify) { return __awaiter(void 0, void 0, void 0, function () {
     return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
-            case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
-        }
+        // GET /api/app/profile
+        fastify.get('/profile', appProfileController_1.getAppProfile);
+        // PATCH /api/app/profile — update name / email / avatar URL
+        fastify.patch('/profile', appProfileController_1.updateAppProfile);
+        // POST /api/app/profile/avatar — multipart avatar upload
+        fastify.post('/profile/avatar', appProfileController_1.uploadAppAvatar);
+        // PUT /api/app/profile/video-quality
+        fastify.put('/profile/video-quality', appProfileController_1.updateVideoQuality);
+        // PUT /api/app/profile/language
+        fastify.put('/profile/language', appProfileController_1.updatePreferredLanguage);
+        // DELETE /api/app/profile
+        fastify.delete('/profile', appProfileController_1.deleteAppAccount);
+        // GET /api/app/devices
+        fastify.get('/devices', appProfileController_1.getDevices);
+        // DELETE /api/app/devices/:deviceId
+        fastify.delete('/devices/:deviceId', appProfileController_1.removeDevice);
+        // GET /api/app/profiles
+        fastify.get('/profiles', appProfileController_1.getProfiles);
+        // POST /api/app/profiles
+        fastify.post('/profiles', appProfileController_1.createProfile);
+        // PUT /api/app/profiles/:profileId
+        fastify.put('/profiles/:profileId', appProfileController_1.updateProfile);
+        // DELETE /api/app/profiles/:profileId
+        fastify.delete('/profiles/:profileId', appProfileController_1.deleteProfile);
+        return [2 /*return*/];
     });
 }); };
-start();
+exports.default = appProfileRoutes;

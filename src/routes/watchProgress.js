@@ -35,21 +35,42 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
+var watchProgressController_1 = require("../controllers/watchProgressController");
+var watchProgressRoutes = function (fastify) { return __awaiter(void 0, void 0, void 0, function () {
     return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
-            case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
-        }
+        // Requires authentication
+        fastify.addHook('onRequest', function (request, reply) { return __awaiter(void 0, void 0, void 0, function () {
+            var err_1;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        return [4 /*yield*/, request.jwtVerify()];
+                    case 1:
+                        _a.sent();
+                        return [3 /*break*/, 3];
+                    case 2:
+                        err_1 = _a.sent();
+                        reply.send(err_1);
+                        return [3 /*break*/, 3];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        }); });
+        // GET /api/app/watch/progress - Fetch saved progress for one item
+        fastify.get('/watch/progress', watchProgressController_1.getWatchProgressItem);
+        // POST /api/app/watch/progress - Save/upsert watch progress
+        fastify.post('/watch/progress', watchProgressController_1.saveWatchProgress);
+        // DELETE /api/app/watch/progress/:contentId - Clear watch progress
+        fastify.delete('/watch/progress/:contentId', watchProgressController_1.clearWatchProgress);
+        // GET /api/app/watch/history - Get full watch history for the user
+        fastify.get('/watch/history', watchProgressController_1.getWatchHistory);
+        // DELETE /api/app/watch/history/all - Clear all watch history
+        fastify.delete('/watch/history/all', watchProgressController_1.clearAllWatchHistory);
+        // DELETE /api/app/watch/history/:id - Delete a specific item from watch history
+        fastify.delete('/watch/history/:id', watchProgressController_1.deleteWatchHistoryItem);
+        return [2 /*return*/];
     });
 }); };
-start();
+exports.default = watchProgressRoutes;

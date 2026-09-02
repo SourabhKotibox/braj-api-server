@@ -35,21 +35,53 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
+exports.markAllNotificationsAsRead = exports.getAdminNotifications = void 0;
+var AdminNotification_1 = require("../models/AdminNotification");
+var getAdminNotifications = function (request, reply) { return __awaiter(void 0, void 0, void 0, function () {
+    var limit, notifications, unreadCount, error_1;
     return __generator(this, function (_a) {
         switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
+            case 0:
+                _a.trys.push([0, 3, , 4]);
+                limit = 50;
+                return [4 /*yield*/, AdminNotification_1.AdminNotificationModel.find()
+                        .sort({ createdAt: -1 })
+                        .limit(limit)
+                        .lean()];
             case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
+                notifications = _a.sent();
+                return [4 /*yield*/, AdminNotification_1.AdminNotificationModel.countDocuments({ isRead: false })];
+            case 2:
+                unreadCount = _a.sent();
+                return [2 /*return*/, reply.send({
+                        success: true,
+                        data: notifications,
+                        unreadCount: unreadCount,
+                    })];
+            case 3:
+                error_1 = _a.sent();
+                return [2 /*return*/, reply.status(500).send({ success: false, error: error_1.message })];
+            case 4: return [2 /*return*/];
         }
     });
 }); };
-start();
+exports.getAdminNotifications = getAdminNotifications;
+var markAllNotificationsAsRead = function (request, reply) { return __awaiter(void 0, void 0, void 0, function () {
+    var error_2;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                _a.trys.push([0, 2, , 3]);
+                return [4 /*yield*/, AdminNotification_1.AdminNotificationModel.updateMany({ isRead: false }, { $set: { isRead: true } })];
+            case 1:
+                _a.sent();
+                return [2 /*return*/, reply.send({ success: true, message: 'All notifications marked as read' })];
+            case 2:
+                error_2 = _a.sent();
+                return [2 /*return*/, reply.status(500).send({ success: false, error: error_2.message })];
+            case 3: return [2 /*return*/];
+        }
+    });
+}); };
+exports.markAllNotificationsAsRead = markAllNotificationsAsRead;

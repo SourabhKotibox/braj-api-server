@@ -367,8 +367,8 @@ const musicApiRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   // ─── Search Songs/Videos/Artists/Albums ─────────────────────────────
-  // GET /api/search?q=xxx&type=songs|videos|artists|albums|all
-  fastify.get('/search', async (request, reply) => {
+  // GET /api/music/search?q=xxx&type=songs|videos|artists|albums|all
+  fastify.get('/music/search', async (request, reply) => {
     try {
       const { q, type } = request.query as { q?: string; type?: string };
       

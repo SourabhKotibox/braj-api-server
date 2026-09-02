@@ -35,21 +35,22 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
+var rbac_1 = require("../middlewares/rbac");
+var countryController_1 = require("../controllers/countryController");
+var countriesRoutes = function (fastify) { return __awaiter(void 0, void 0, void 0, function () {
     return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
-            case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
-        }
+        // List all countries with pagination — allow any authenticated user so dropdowns work across forms
+        fastify.get('/', { onRequest: [rbac_1.authenticateAndAttach] }, countryController_1.listCountries);
+        // Get country by ID — allow any authenticated user
+        fastify.get('/:id', { onRequest: [rbac_1.authenticateAndAttach] }, countryController_1.getCountryById);
+        // Create new country — require settings permission
+        fastify.post('/', { onRequest: [(0, rbac_1.requirePermission)('settings', 'canCreate')] }, countryController_1.createCountry);
+        // Update country — require settings permission
+        fastify.put('/:id', { onRequest: [(0, rbac_1.requirePermission)('settings', 'canEdit')] }, countryController_1.updateCountry);
+        // Delete country — require settings permission
+        fastify.delete('/:id', { onRequest: [(0, rbac_1.requirePermission)('settings', 'canDelete')] }, countryController_1.deleteCountry);
+        return [2 /*return*/];
     });
 }); };
-start();
+exports.default = countriesRoutes;

@@ -35,21 +35,19 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
+var auth_1 = require("../middlewares/auth");
+var dashboardController_1 = require("../controllers/dashboardController");
+var dashboardRoutes = function (fastify) { return __awaiter(void 0, void 0, void 0, function () {
     return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
-            case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
-        }
+        fastify.get('/dashboard/stats', { onRequest: [auth_1.authenticate] }, dashboardController_1.getDashboardStats);
+        fastify.get('/dashboard/revenue', { onRequest: [auth_1.authenticate] }, dashboardController_1.getRevenueData);
+        fastify.get('/dashboard/new-subscribers', { onRequest: [auth_1.authenticate] }, dashboardController_1.getNewSubscribersData);
+        fastify.get('/dashboard/most-watched', { onRequest: [auth_1.authenticate] }, dashboardController_1.getMostWatchedData);
+        fastify.get('/dashboard/top-genres', { onRequest: [auth_1.authenticate] }, dashboardController_1.getTopGenresData);
+        fastify.get('/dashboard/reviews', { onRequest: [auth_1.authenticate] }, dashboardController_1.getReviews);
+        fastify.get('/dashboard/transactions', { onRequest: [auth_1.authenticate] }, dashboardController_1.getTransactions);
+        return [2 /*return*/];
     });
 }); };
-start();
+exports.default = dashboardRoutes;

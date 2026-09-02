@@ -35,21 +35,27 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
+var rbac_1 = require("../middlewares/rbac");
+var pageController_1 = require("../controllers/pageController");
+var pagesRoutes = function (fastify, opts) { return __awaiter(void 0, void 0, void 0, function () {
     return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
-            case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
-        }
+        // List all pages with pagination (public can view published, admin can view all if token provided)
+        // Wait, if we remove requirePermission, anyone can list pages. We should allow listing published pages publicly!
+        fastify.get('/', pageController_1.listPages);
+        // Get page by slug (publicly accessible)
+        fastify.get('/:slug', pageController_1.getPageById);
+        // Get page by ID (publicly accessible)
+        fastify.get('/item/:pageId', pageController_1.getPageById);
+        // Create new page
+        fastify.post('/', { onRequest: [(0, rbac_1.requirePermission)('pages', 'canCreate')] }, pageController_1.createPage);
+        // Update page
+        fastify.put('/:pageId', { onRequest: [(0, rbac_1.requirePermission)('pages', 'canEdit')] }, pageController_1.updatePage);
+        // Delete page
+        fastify.delete('/:pageId', { onRequest: [(0, rbac_1.requirePermission)('pages', 'canDelete')] }, pageController_1.deletePage);
+        // Bulk delete pages
+        fastify.post('/bulk-delete', { onRequest: [(0, rbac_1.requirePermission)('pages', 'canCreate')] }, pageController_1.bulkDeletePages);
+        return [2 /*return*/];
     });
 }); };
-start();
+exports.default = pagesRoutes;

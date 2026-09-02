@@ -35,21 +35,36 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
+var movieController_1 = require("../controllers/movieController");
+var rbac_1 = require("../middlewares/rbac");
+var movie = function (fastify) { return __awaiter(void 0, void 0, void 0, function () {
     return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
-            case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
-        }
+        // Get all movies with pagination and filtering
+        fastify.get('/', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canView')] }, movieController_1.getAllMovies);
+        // Get pending approvals (MUST be registered before /:id)
+        fastify.get('/pending-approvals', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canView')] }, movieController_1.getPendingApprovals);
+        // Create new movie
+        fastify.post('/', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canCreate')] }, movieController_1.createMovie);
+        // Approve movie
+        fastify.post('/item/:id/approve', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canEdit')] }, movieController_1.approveMovie);
+        // Reject movie
+        fastify.post('/item/:id/reject', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canEdit')] }, movieController_1.rejectMovie);
+        // Get single movie by ID
+        fastify.get('/:id', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canView')] }, movieController_1.getMovieById);
+        // Update movie by ID
+        fastify.put('/:id', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canEdit')] }, movieController_1.updateMovie);
+        // Delete movie by ID
+        fastify.delete('/:id', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canDelete')] }, movieController_1.deleteMovie);
+        // Update movie status
+        fastify.patch('/:id/status', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canEdit')] }, movieController_1.updateMovieStatus);
+        // Toggle featured status
+        fastify.patch('/:id/featured', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canEdit')] }, movieController_1.toggleFeatured);
+        // Toggle trending status
+        fastify.patch('/:id/trending', { onRequest: [(0, rbac_1.requirePermission)('movies', 'canEdit')] }, movieController_1.toggleTrending);
+        // Poll HLS processing status — used by admin panel progress indicator
+        fastify.get('/:id/processing-status', movieController_1.getMovieProcessingStatus);
+        return [2 /*return*/];
     });
 }); };
-start();
+exports.default = movie;

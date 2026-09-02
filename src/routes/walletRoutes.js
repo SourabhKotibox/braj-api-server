@@ -35,21 +35,30 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
-var app_1 = __importDefault(require("./src/app"));
-var start = function () { return __awaiter(void 0, void 0, void 0, function () {
-    return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0: return [4 /*yield*/, app_1.default.ready()];
-            case 1:
-                _a.sent();
-                console.log(app_1.default.printRoutes());
-                process.exit(0);
-                return [2 /*return*/];
-        }
+exports.default = default_1;
+var walletController_1 = require("../controllers/walletController");
+var auth_1 = require("../middlewares/auth");
+var rbac_1 = require("../middlewares/rbac");
+function default_1(fastify) {
+    return __awaiter(this, void 0, void 0, function () {
+        return __generator(this, function (_a) {
+            // Public & User routes
+            fastify.get('/balance', { preHandler: [auth_1.authenticate] }, walletController_1.getWalletData);
+            fastify.get('/packages', walletController_1.getCoinPackages);
+            fastify.post('/topup', { preHandler: [auth_1.authenticate] }, walletController_1.topUpWallet);
+            fastify.post('/unlock-episode', { preHandler: [auth_1.authenticate] }, walletController_1.unlockEpisode);
+            fastify.get('/unlocked-episodes', { preHandler: [auth_1.authenticate] }, walletController_1.getUnlockedEpisodes);
+            fastify.delete('/transactions', { preHandler: [auth_1.authenticate] }, walletController_1.clearTransactions);
+            fastify.delete('/transactions/:id', { preHandler: [auth_1.authenticate] }, walletController_1.deleteTransaction);
+            // Razorpay payment routes (user-facing)
+            fastify.post('/razorpay/order', { preHandler: [auth_1.authenticate] }, walletController_1.createWalletRazorpayOrder);
+            fastify.post('/razorpay/verify', { preHandler: [auth_1.authenticate] }, walletController_1.verifyWalletRazorpayPayment);
+            // Admin routes
+            fastify.post('/packages', { preHandler: [auth_1.authenticate], onRequest: [(0, rbac_1.requirePermission)('settings', 'canEdit')] }, walletController_1.createCoinPackage);
+            fastify.put('/packages/:id', { preHandler: [auth_1.authenticate], onRequest: [(0, rbac_1.requirePermission)('settings', 'canEdit')] }, walletController_1.updateCoinPackage);
+            fastify.delete('/packages/:id', { preHandler: [auth_1.authenticate], onRequest: [(0, rbac_1.requirePermission)('settings', 'canEdit')] }, walletController_1.deleteCoinPackage);
+            return [2 /*return*/];
+        });
     });
-}); };
-start();
+}
