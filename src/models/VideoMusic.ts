@@ -3,8 +3,11 @@ import mongoose, { Document, Schema } from 'mongoose';
 export interface IVideoMusic extends Document {
   title: string;
   artist: string;
+  artistId?: mongoose.Types.ObjectId;
   album?: string;
+  albumId?: mongoose.Types.ObjectId;
   description?: string;
+  shortDescription?: string;
   thumbnail?: string;
   coverImage?: string;
   bannerImage?: string;
@@ -23,9 +26,13 @@ export interface IVideoMusic extends Document {
   featured: boolean;
   trending: boolean;
   isNewContent: boolean;
+  isExclusive: boolean;
   downloadAllowed: boolean;
   planRequired: 'free' | 'basic' | 'standard' | 'premium';
   releaseDate?: Date;
+  slug?: string;
+  metaTitle?: string;
+  metaDescription?: string;
   videoQualities?: Array<{
     quality: '144p' | '240p' | '360p' | '480p' | '720p' | '1080p';
     url: string;
@@ -39,8 +46,11 @@ const VideoMusicSchema = new Schema<IVideoMusic>(
   {
     title: { type: String, required: true, index: true },
     artist: { type: String, required: true, index: true },
+    artistId: { type: Schema.Types.ObjectId, ref: 'AudioArtist' },
     album: String,
+    albumId: { type: Schema.Types.ObjectId, ref: 'AudioAlbum' },
     description: String,
+    shortDescription: String,
     thumbnail: String,
     coverImage: String,
     bannerImage: String,
@@ -66,9 +76,13 @@ const VideoMusicSchema = new Schema<IVideoMusic>(
     featured: { type: Boolean, default: false },
     trending: { type: Boolean, default: false },
     isNewContent: { type: Boolean, default: true },
+    isExclusive: { type: Boolean, default: false },
     downloadAllowed: { type: Boolean, default: true },
     planRequired: { type: String, enum: ['free', 'basic', 'standard', 'premium'], default: 'free' },
     releaseDate: Date,
+    slug: { type: String, index: true },
+    metaTitle: String,
+    metaDescription: String,
     videoQualities: [
       {
         quality: { type: String, enum: ['144p', '240p', '360p', '480p', '720p', '1080p'] },

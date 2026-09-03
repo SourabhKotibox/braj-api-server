@@ -11,6 +11,7 @@ export interface IAudio extends Document {
   thumbnail?: string;
   coverImage?: string;
   bannerImage?: string;
+  audioUrl?: string;
   audioQualities?: Array<{
     quality: 'low' | 'medium' | 'high' | 'lossless';
     url: string;
@@ -57,6 +58,7 @@ const AudioSchema = new Schema<IAudio>(
     thumbnail: String,
     coverImage: String,
     bannerImage: String,
+    audioUrl: String,
     audioQualities: [
       {
         quality: { type: String, enum: ['low', 'medium', 'high', 'lossless'] },

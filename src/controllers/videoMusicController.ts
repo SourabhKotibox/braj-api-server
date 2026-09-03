@@ -2,6 +2,14 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { VideoMusicModel } from '../models/VideoMusic';
 import { logger } from '../lib/logger';
 
+const getVideoUrl = (video: any): string => {
+  if (video.videoQualities && video.videoQualities.length > 0) {
+    const high = video.videoQualities.find((q: any) => q.quality === '1080p' || q.quality === '720p');
+    return high?.url || video.videoQualities[0]?.url || video.videoUrl || video.hlsUrl || '';
+  }
+  return video.videoUrl || video.hlsUrl || '';
+};
+
 export const getAllVideoMusics = async (request: FastifyRequest, reply: FastifyReply) => {
   try {
     const query = request.query as {
@@ -51,7 +59,7 @@ export const getAllVideoMusics = async (request: FastifyRequest, reply: FastifyR
 
     return reply.send({
       success: true,
-      data: videos.map((v) => ({ ...v, id: v._id?.toString() })),
+      data: videos.map((v) => ({ ...v, id: v._id?.toString(), videoUrl: getVideoUrl(v) })),
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
     });
   } catch (error: any) {
@@ -73,7 +81,7 @@ export const getVideoMusicById = async (request: FastifyRequest, reply: FastifyR
       return reply.status(404).send({ success: false, error: 'Video music not found' });
     }
 
-    return reply.send({ success: true, data: { ...video, id: video._id?.toString() } });
+    return reply.send({ success: true, data: { ...video, id: video._id?.toString(), videoUrl: getVideoUrl(video) } });
   } catch (error: any) {
     logger.error({ error }, 'Error getting video music by ID');
     return reply.status(500).send({ success: false, error: error.message });
@@ -91,11 +99,15 @@ export const createVideoMusic = async (request: FastifyRequest, reply: FastifyRe
       body.processingStatus = 'ready';
     }
 
+    if ((!body.videoQualities || body.videoQualities.length === 0) && body.videoUrl) {
+      body.videoQualities = [{ quality: '720p', url: body.videoUrl, size: 0 }];
+    }
+
     const video = await VideoMusicModel.create(body);
 
     return reply.status(201).send({
       success: true,
-      data: { ...video.toObject(), id: video._id?.toString() },
+      data: { ...video.toObject(), id: video._id?.toString(), videoUrl: getVideoUrl(video.toObject()) },
     });
   } catch (error: any) {
     logger.error({ error }, 'Error creating video music');

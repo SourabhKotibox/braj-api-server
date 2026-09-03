@@ -137,9 +137,10 @@ export const createAudio = async (request: FastifyRequest, reply: FastifyReply) 
       metaDescription: body.metaDescription || body.description || '',
     };
 
-    // Add audio qualities if provided
     if (body.audioQualities && body.audioQualities.length > 0) {
       audioData.audioQualities = body.audioQualities;
+    } else if (audioData.audioUrl) {
+      audioData.audioQualities = [{ quality: 'high', url: audioData.audioUrl, bitrate: 320, size: 0 }];
     }
 
     const audio = await AudioModel.create(audioData);

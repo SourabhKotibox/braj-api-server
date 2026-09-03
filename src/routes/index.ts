@@ -27,7 +27,7 @@ import audioArtistsRoutes from './audioArtists';
 import audioAlbumsRoutes from './audioAlbums';
 import mobileRoutes from './mobile';
 import videoMusicRoutes from './videoMusic';
-import relatedRoutes from './related';
+import publicMusicRoutes, { getAudioUrl, getVideoUrl } from './publicMusic';
 import adminUsersRoutes from './adminUsers';
 import sectionsRoutes from './sections';
 import contentsRoutes from './contents';
@@ -94,407 +94,10 @@ const router: FastifyPluginAsync = async (fastify) => {
   fastify.register(audioAlbumsRoutes, { prefix: '/audio-albums' });
   fastify.register(mobileRoutes);
   fastify.register(videoMusicRoutes, { prefix: '/video-music' });
+  fastify.register(publicMusicRoutes);
   fastify.register(adminUsersRoutes, { prefix: '/admin-users' });
 
-   // Public audio/video routes (no auth required)
-   fastify.get('/public/audio/related', async (request, reply) => {
-     try {
-       const { AudioModel } = await import('../models/Audio');
-       const { id, limit } = request.query as { id: string; limit?: string };
 
-       if (!id) {
-         return reply.status(400).send({ success: false, error: 'id query parameter is required' });
-       }
-
-       const audio = await AudioModel.findById(id).lean();
-       if (!audio) {
-         return reply.status(404).send({ success: false, error: 'Audio not found' });
-       }
-
-       const relatedLimit = Math.min(20, Math.max(1, Number(limit || 10)));
-
-       const filter: any = {
-         status: 'published',
-         _id: { $ne: audio._id },
-         $or: [],
-       };
-
-       if (audio.artist) {
-         filter.$or.push({ artist: audio.artist });
-       }
-       if (audio.genre) {
-         filter.$or.push({ genre: audio.genre });
-       }
-       if (audio.tags && audio.tags.length > 0) {
-         filter.$or.push({ tags: { $in: audio.tags } });
-       }
-
-       const query = filter.$or.length > 0 ? filter : { status: 'published', _id: { $ne: audio._id } };
-
-       const related = await AudioModel.find(query)
-         .sort({ views: -1, createdAt: -1 })
-         .limit(relatedLimit)
-         .lean();
-
-       return reply.send({
-         success: true,
-         data: related.map((a: any) => ({ ...a, id: a._id?.toString() })),
-       });
-     } catch (error: any) {
-       return reply.status(500).send({ success: false, error: error.message });
-     }
-   });
-
-   fastify.get('/public/video-music/related', async (request, reply) => {
-     try {
-       const { VideoMusicModel } = await import('../models/VideoMusic');
-       const { id, limit } = request.query as { id: string; limit?: string };
-
-       if (!id) {
-         return reply.status(400).send({ success: false, error: 'id query parameter is required' });
-       }
-
-       const video = await VideoMusicModel.findById(id).lean();
-       if (!video) {
-         return reply.status(404).send({ success: false, error: 'Video not found' });
-       }
-
-       const relatedLimit = Math.min(20, Math.max(1, Number(limit || 10)));
-
-       const filter: any = {
-         status: 'published',
-         _id: { $ne: video._id },
-         $or: [],
-       };
-
-       if (video.artist) {
-         filter.$or.push({ artist: video.artist });
-       }
-       if (video.genre) {
-         filter.$or.push({ genre: video.genre });
-       }
-       if (video.tags && video.tags.length > 0) {
-         filter.$or.push({ tags: { $in: video.tags } });
-       }
-
-       const query = filter.$or.length > 0 ? filter : { status: 'published', _id: { $ne: video._id } };
-
-       const related = await VideoMusicModel.find(query)
-         .sort({ views: -1, createdAt: -1 })
-         .limit(relatedLimit)
-         .lean();
-
-       return reply.send({
-         success: true,
-         data: related.map((v: any) => ({ ...v, id: v._id?.toString() })),
-       });
-     } catch (error: any) {
-       return reply.status(500).send({ success: false, error: error.message });
-     }
-   });
-   
-   fastify.get('/public/audio', async (request, reply) => {
-    try {
-      const { AudioModel } = await import('../models/Audio');
-      const query = request.query as any;
-      const page = Math.max(1, Number(query.page || 1));
-      const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
-      const filter: any = { status: 'published' };
-      if (query.search) {
-        filter.$or = [
-          { title: new RegExp(query.search, 'i') },
-          { artist: new RegExp(query.search, 'i') },
-        ];
-      }
-      if (query.featured === 'true') filter.featured = true;
-      if (query.trending === 'true') filter.trending = true;
-      if (query.genre) filter.genre = query.genre;
-      if (query.category) filter.category = query.category;
-      if (query.language) filter.language = query.language;
-      if (query.artist) filter.artist = new RegExp(query.artist, 'i');
-      if (query.album) filter.album = new RegExp(query.album, 'i');
-      const [audios, total] = await Promise.all([
-        AudioModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-        AudioModel.countDocuments(filter),
-      ]);
-      return reply.send({ success: true, data: audios.map((a: any) => ({ ...a, id: a._id?.toString() })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Get unique artists
-  fastify.get('/public/audio/artists', async (request, reply) => {
-    try {
-      const { AudioModel } = await import('../models/Audio');
-      const artists = await AudioModel.distinct('artist', { status: 'published' });
-      return reply.send({ success: true, data: artists.filter(Boolean).sort() });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Get unique albums
-  fastify.get('/public/audio/albums', async (request, reply) => {
-    try {
-      const { AudioModel } = await import('../models/Audio');
-      const albums = await AudioModel.distinct('album', { status: 'published' });
-      return reply.send({ success: true, data: albums.filter(Boolean).sort() });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Get audio by artist
-  fastify.get('/public/audio/artist/:artist', async (request, reply) => {
-    try {
-      const { AudioModel } = await import('../models/Audio');
-      const { artist } = request.params as { artist: string };
-      const query = request.query as any;
-      const page = Math.max(1, Number(query.page || 1));
-      const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
-      const filter: any = { status: 'published', artist: new RegExp(artist, 'i') };
-      const [audios, total] = await Promise.all([
-        AudioModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-        AudioModel.countDocuments(filter),
-      ]);
-      return reply.send({ success: true, data: audios.map((a: any) => ({ ...a, id: a._id?.toString() })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Get audio by album
-  fastify.get('/public/audio/album/:album', async (request, reply) => {
-    try {
-      const { AudioModel } = await import('../models/Audio');
-      const { album } = request.params as { album: string };
-      const query = request.query as any;
-      const page = Math.max(1, Number(query.page || 1));
-      const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
-      const filter: any = { status: 'published', album: new RegExp(album, 'i') };
-      const [audios, total] = await Promise.all([
-        AudioModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-        AudioModel.countDocuments(filter),
-      ]);
-      return reply.send({ success: true, data: audios.map((a: any) => ({ ...a, id: a._id?.toString() })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  fastify.get('/public/audio/:id', async (request, reply) => {
-    try {
-      const { AudioModel } = await import('../models/Audio');
-      const { id } = request.params as { id: string };
-      const audio = await AudioModel.findById(id).lean();
-      if (!audio) return reply.status(404).send({ success: false, error: 'Not found' });
-      return reply.send({ success: true, data: { ...audio, id: audio._id?.toString() } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  fastify.get('/public/video-music', async (request, reply) => {
-    try {
-      const { VideoMusicModel } = await import('../models/VideoMusic');
-      const query = request.query as any;
-      const page = Math.max(1, Number(query.page || 1));
-      const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
-      const filter: any = { status: 'published' };
-      if (query.search) {
-        filter.$or = [
-          { title: new RegExp(query.search, 'i') },
-          { artist: new RegExp(query.search, 'i') },
-        ];
-      }
-      if (query.featured === 'true') filter.featured = true;
-      if (query.trending === 'true') filter.trending = true;
-      if (query.genre) filter.genre = query.genre;
-      if (query.category) filter.category = query.category;
-      if (query.language) filter.language = query.language;
-      if (query.artist) filter.artist = new RegExp(query.artist, 'i');
-      if (query.album) filter.album = new RegExp(query.album, 'i');
-      const [videos, total] = await Promise.all([
-        VideoMusicModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-        VideoMusicModel.countDocuments(filter),
-      ]);
-      return reply.send({ success: true, data: videos.map((v: any) => ({ ...v, id: v._id?.toString() })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Get unique artists for video music
-  fastify.get('/public/video-music/artists', async (request, reply) => {
-    try {
-      const { VideoMusicModel } = await import('../models/VideoMusic');
-      const artists = await VideoMusicModel.distinct('artist', { status: 'published' });
-      return reply.send({ success: true, data: artists.filter(Boolean).sort() });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Get unique albums for video music
-  fastify.get('/public/video-music/albums', async (request, reply) => {
-    try {
-      const { VideoMusicModel } = await import('../models/VideoMusic');
-      const albums = await VideoMusicModel.distinct('album', { status: 'published' });
-      return reply.send({ success: true, data: albums.filter(Boolean).sort() });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Get video music by artist
-  fastify.get('/public/video-music/artist/:artist', async (request, reply) => {
-    try {
-      const { VideoMusicModel } = await import('../models/VideoMusic');
-      const { artist } = request.params as { artist: string };
-      const query = request.query as any;
-      const page = Math.max(1, Number(query.page || 1));
-      const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
-      const filter: any = { status: 'published', artist: new RegExp(artist, 'i') };
-      const [videos, total] = await Promise.all([
-        VideoMusicModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-        VideoMusicModel.countDocuments(filter),
-      ]);
-      return reply.send({ success: true, data: videos.map((v: any) => ({ ...v, id: v._id?.toString() })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Get video music by album
-  fastify.get('/public/video-music/album/:album', async (request, reply) => {
-    try {
-      const { VideoMusicModel } = await import('../models/VideoMusic');
-      const { album } = request.params as { album: string };
-      const query = request.query as any;
-      const page = Math.max(1, Number(query.page || 1));
-      const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
-      const filter: any = { status: 'published', album: new RegExp(album, 'i') };
-      const [videos, total] = await Promise.all([
-        VideoMusicModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-        VideoMusicModel.countDocuments(filter),
-      ]);
-      return reply.send({ success: true, data: videos.map((v: any) => ({ ...v, id: v._id?.toString() })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  fastify.get('/public/video-music/:id', async (request, reply) => {
-    try {
-      const { VideoMusicModel } = await import('../models/VideoMusic');
-      const { id } = request.params as { id: string };
-      const video = await VideoMusicModel.findById(id).lean();
-      if (!video) return reply.status(404).send({ success: false, error: 'Not found' });
-      return reply.send({ success: true, data: { ...video, id: video._id?.toString() } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Audio normalization endpoint
-  fastify.post('/audio/normalize', async (request, reply) => {
-    try {
-      const { audioUrl, targetLoudness, truePeak, loudnessRange } = request.body as any;
-      if (!audioUrl) {
-        return reply.status(400).send({ success: false, error: 'audioUrl is required' });
-      }
-
-      const { normalizeAudio } = await import('../lib/audioNormalization');
-      const result = await normalizeAudio(audioUrl, {
-        targetLoudness: targetLoudness ? Number(targetLoudness) : undefined,
-        truePeak: truePeak ? Number(truePeak) : undefined,
-        loudnessRange: loudnessRange ? Number(loudnessRange) : undefined,
-      });
-
-      return reply.send(result);
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Audio loudness analysis endpoint
-  fastify.post('/audio/analyze', async (request, reply) => {
-    try {
-      const { audioUrl } = request.body as any;
-      if (!audioUrl) {
-        return reply.status(400).send({ success: false, error: 'audioUrl is required' });
-      }
-
-      const { analyzeAudioLoudness } = await import('../lib/audioNormalization');
-      const loudnessInfo = await analyzeAudioLoudness(audioUrl);
-
-      return reply.send({ success: true, data: loudnessInfo });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // ─── Public Like/Wishlist/Share/Download for Audio/Video Music ───────────────
-
-  fastify.post('/public/audio/:id/like', async (request, reply) => {
-    try {
-      const { AudioModel } = await import('../models/Audio');
-      const { id } = request.params as { id: string };
-      const audio = await AudioModel.findByIdAndUpdate(id, { $inc: { likes: 1 } }, { returnDocument: 'after' }).select('likes').lean();
-      if (!audio) return reply.status(404).send({ success: false, error: 'Audio not found' });
-      return reply.send({ success: true, data: { likes: audio.likes, isLiked: true } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  fastify.post('/public/video-music/:id/like', async (request, reply) => {
-    try {
-      const { VideoMusicModel } = await import('../models/VideoMusic');
-      const { id } = request.params as { id: string };
-      const video = await VideoMusicModel.findByIdAndUpdate(id, { $inc: { likes: 1 } }, { returnDocument: 'after' }).select('likes').lean();
-      if (!video) return reply.status(404).send({ success: false, error: 'Video not found' });
-      return reply.send({ success: true, data: { likes: video.likes, isLiked: true } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  fastify.post('/public/audio/:id/share', async (request, reply) => {
-    try {
-      const { AudioModel } = await import('../models/Audio');
-      const { id } = request.params as { id: string };
-      const audio = await AudioModel.findByIdAndUpdate(id, { $inc: { shares: 1 } }, { returnDocument: 'after' }).select('shares').lean();
-      return reply.send({ success: true, data: { shares: audio?.shares ?? 1 } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  fastify.post('/public/video-music/:id/share', async (request, reply) => {
-    try {
-      const { VideoMusicModel } = await import('../models/VideoMusic');
-      const { id } = request.params as { id: string };
-      const video = await VideoMusicModel.findByIdAndUpdate(id, { $inc: { shares: 1 } }, { returnDocument: 'after' }).select('shares').lean();
-      return reply.send({ success: true, data: { shares: video?.shares ?? 1 } });
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
-
-  // Direct download endpoint (triggers file download)
-  fastify.get('/public/download', async (request, reply) => {
-    try {
-      const { url, filename } = request.query as { url?: string; filename?: string };
-      if (!url) return reply.status(400).send({ success: false, error: 'URL is required' });
-      reply.header('Content-Disposition', `attachment; filename="${filename || 'download.mp3'}"`);
-      reply.header('Content-Type', 'application/octet-stream');
-      reply.redirect(url);
-    } catch (error: any) {
-      return reply.status(500).send({ success: false, error: error.message });
-    }
-  });
 
   fastify.register(sectionsRoutes, { prefix: '/sections' });
   fastify.register(contentsRoutes, { prefix: '/contents' });
@@ -569,9 +172,10 @@ const router: FastifyPluginAsync = async (fastify) => {
   fastify.get('/public/banners', async (request, reply) => {
     try {
       const { BannerModel } = await import('../models/Banner');
-      const { page, limit } = request.query as { page?: string; limit?: string };
+      const { page, targetPage, limit } = request.query as { page?: string; targetPage?: string; limit?: string };
       const now = new Date();
-      const pageNum = Math.max(1, Number(page || 1));
+      const pageName = targetPage || (page && Number.isNaN(Number(page)) ? page : undefined);
+      const pageNum = Math.max(1, Number(page && !Number.isNaN(Number(page)) ? page : 1));
       const limitNum = Math.min(50, Math.max(1, Number(limit || 10)));
 
       const filter: any = {
@@ -582,9 +186,8 @@ const router: FastifyPluginAsync = async (fastify) => {
         ],
       };
 
-      // Filter by target page if specified
-      if (page) {
-        filter.targetPages = { $in: [page] };
+      if (pageName) {
+        filter.targetPages = { $in: [pageName] };
       }
 
       const [banners, total] = await Promise.all([
@@ -608,8 +211,8 @@ const router: FastifyPluginAsync = async (fastify) => {
       const contentMap = new Map();
       for (const movie of movies) contentMap.set(movie._id.toString(), { ...movie, type: 'movie' });
       for (const content of contents) contentMap.set(content._id.toString(), { ...content, type: content.contentType || 'series' });
-      for (const audio of audios) contentMap.set(audio._id.toString(), { ...audio, type: 'audio' });
-      for (const vm of videoMusics) contentMap.set(vm._id.toString(), { ...vm, type: 'video-music' });
+      for (const audio of audios) contentMap.set(audio._id.toString(), { ...audio, id: audio._id.toString(), type: 'audio', audioUrl: getAudioUrl(audio) });
+      for (const vm of videoMusics) contentMap.set(vm._id.toString(), { ...vm, id: vm._id.toString(), type: 'video-music', videoUrl: getVideoUrl(vm) });
 
       const populatedBanners = banners.map(banner => ({
         id: banner._id.toString(),

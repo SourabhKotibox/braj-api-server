@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 config({ path: join(__dirname, '../.env') });
 
-const { default: fastify } = await import('./app.js');
+const { default: fastify } = await import('./app');
 import { logger } from './lib/logger';
 import { connectMongoDB } from './lib/mongodb';
 import { connectRedis } from './lib/redis';

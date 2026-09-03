@@ -4,6 +4,9 @@ import { ContentModel } from '../models/Content';
 import { EpisodeModel } from '../models/Episode';
 import { GenreModel } from '../models/Genre';
 import { BannerModel } from '../models/Banner';
+import { AudioModel } from '../models/Audio';
+import { VideoMusicModel } from '../models/VideoMusic';
+import { getAudioUrl, getVideoUrl } from '../routes/publicMusic';
 import mongoose from 'mongoose';
 import { logger } from '../lib/logger';
 
@@ -184,6 +187,11 @@ export const getWebHome = async (request: FastifyRequest, reply: FastifyReply) =
     ];
 
     const results = await Promise.all(queries);
+    const [featuredAudioRaw, trendingAudioRaw, featuredVideoMusicRaw] = await Promise.all([
+      AudioModel.find({ status: 'published', featured: true }).sort({ views: -1 }).limit(12).lean(),
+      AudioModel.find({ status: 'published', trending: true }).sort({ views: -1 }).limit(12).lean(),
+      VideoMusicModel.find({ status: 'published' }).sort({ featured: -1, views: -1, createdAt: -1 }).limit(12).lean(),
+    ]);
 
     // Extract results
     const heroContent = results[0];
@@ -247,6 +255,24 @@ export const getWebHome = async (request: FastifyRequest, reply: FastifyReply) =
         newDramas,
         actionMovies,
         dramaShows,
+        featuredAudio: featuredAudioRaw.map((a: any) => ({
+          ...a,
+          id: a._id.toString(),
+          audioUrl: getAudioUrl(a),
+          thumbnail: a.thumbnail || a.coverImage || '',
+        })),
+        trendingAudio: trendingAudioRaw.map((a: any) => ({
+          ...a,
+          id: a._id.toString(),
+          audioUrl: getAudioUrl(a),
+          thumbnail: a.thumbnail || a.coverImage || '',
+        })),
+        featuredVideoMusic: featuredVideoMusicRaw.map((v: any) => ({
+          ...v,
+          id: v._id.toString(),
+          videoUrl: getVideoUrl(v),
+          thumbnail: v.thumbnail || v.coverImage || '',
+        })),
       }
     };
 
