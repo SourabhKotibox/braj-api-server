@@ -6,6 +6,7 @@ import { GenreModel } from '../models/Genre';
 import { BannerModel } from '../models/Banner';
 import { AudioModel } from '../models/Audio';
 import { VideoMusicModel } from '../models/VideoMusic';
+import { ContestVideoModel } from '../models/ContestVideo';
 import { getAudioUrl, getVideoUrl } from '../routes/publicMusic';
 import mongoose from 'mongoose';
 import { logger } from '../lib/logger';
@@ -187,10 +188,11 @@ export const getWebHome = async (request: FastifyRequest, reply: FastifyReply) =
     ];
 
     const results = await Promise.all(queries);
-    const [featuredAudioRaw, trendingAudioRaw, featuredVideoMusicRaw] = await Promise.all([
+    const [featuredAudioRaw, trendingAudioRaw, featuredVideoMusicRaw, contestsRaw] = await Promise.all([
       AudioModel.find({ status: 'published', featured: true }).sort({ views: -1 }).limit(12).lean(),
       AudioModel.find({ status: 'published', trending: true }).sort({ views: -1 }).limit(12).lean(),
       VideoMusicModel.find({ status: 'published' }).sort({ featured: -1, views: -1, createdAt: -1 }).limit(12).lean(),
+      ContestVideoModel.find({ status: 'published' }).sort({ featured: -1, views: -1, createdAt: -1 }).limit(12).lean(),
     ]);
 
     // Extract results
@@ -272,6 +274,11 @@ export const getWebHome = async (request: FastifyRequest, reply: FastifyReply) =
           id: v._id.toString(),
           videoUrl: getVideoUrl(v),
           thumbnail: v.thumbnail || v.coverImage || '',
+        })),
+        contests: contestsRaw.map((c: any) => ({
+          ...c,
+          id: c._id.toString(),
+          thumbnail: c.thumbnail || c.coverImage || '',
         })),
       }
     };

@@ -437,6 +437,9 @@ export const getVideoDurationSeconds = async (filePath: string): Promise<number 
     const output = await runCommand('ffprobe', [
       '-v',
       'error',
+      ...(filePath.startsWith('http://') || filePath.startsWith('https://')
+        ? ['-protocol_whitelist', 'file,http,https,tcp,tls,crypto']
+        : []),
       '-show_entries',
       'format=duration',
       '-of',

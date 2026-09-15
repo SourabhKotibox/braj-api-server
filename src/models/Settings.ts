@@ -31,7 +31,7 @@ export interface ISettings extends Document {
   mailFrom: string;
   mailFromName: string;
   // Storage
-  storageDriver: 'local' | 's3' | 'bunny';
+  storageDriver: 'local' | 's3' | 'bunny' | 'spaces';
   awsAccessKeyId: string;
   awsSecretAccessKey: string;
   awsRegion: string;
@@ -40,6 +40,15 @@ export interface ISettings extends Document {
   bunnyStorageZone: string;
   bunnyAccessKey: string;
   bunnyCdnUrl: string;
+  // DigitalOcean Spaces
+  doSpacesEnabled: boolean;
+  doSpacesAccessKey: string;
+  doSpacesSecretKey: string;
+  doSpacesRegion: string;
+  doSpacesBucket: string;
+  doSpacesCdnUrl: string;
+  doSpacesPathStyleEndpoint: boolean;
+  doSpacesBrowserDirectUpload: boolean;
   // Customization
   primaryColor: string;
   colorTheme: string;
@@ -162,7 +171,7 @@ const SettingsSchema = new Schema<ISettings>(
     mailFrom: { type: String, default: 'info@brajcinema.tv' },
     mailFromName: { type: String, default: 'Braj Cinema TV' },
     // Storage
-    storageDriver: { type: String, enum: ['local', 's3', 'bunny'], default: 'local' },
+    storageDriver: { type: String, enum: ['local', 's3', 'bunny', 'spaces'], default: 'local' },
     awsAccessKeyId: { type: String, default: '' },
     awsSecretAccessKey: { type: String, default: '' },
     awsRegion: { type: String, default: '' },
@@ -171,6 +180,15 @@ const SettingsSchema = new Schema<ISettings>(
     bunnyStorageZone: { type: String, default: '' },
     bunnyAccessKey: { type: String, default: '' },
     bunnyCdnUrl: { type: String, default: '' },
+    // DigitalOcean Spaces
+    doSpacesEnabled: { type: Boolean, default: false },
+    doSpacesAccessKey: { type: String, default: '' },
+    doSpacesSecretKey: { type: String, default: '' },
+    doSpacesRegion: { type: String, default: '' },
+    doSpacesBucket: { type: String, default: '' },
+    doSpacesCdnUrl: { type: String, default: '' },
+    doSpacesPathStyleEndpoint: { type: Boolean, default: false },
+    doSpacesBrowserDirectUpload: { type: Boolean, default: true },
     // Customization
     primaryColor: { type: String, default: '#e50914' },
     colorTheme: { type: String, default: 'blue-green' },

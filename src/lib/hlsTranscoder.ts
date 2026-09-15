@@ -6,6 +6,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { MediaFileModel, IHlsQuality } from '../models/MediaFile';
 import { logger } from './logger';
+import { getHlsPublicBaseUrl, isS3Configured, uploadHlsFolderToS3 } from './s3';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,9 +33,15 @@ const QUALITY_PRESETS = [
   { quality: '2160p', height: 2160, bitrate: 16000 },
 ];
 
+const ffmpegInputOptions = (input: string) =>
+  input.startsWith('http://') || input.startsWith('https://')
+    ? ['-protocol_whitelist', 'file,http,https,tcp,tls,crypto']
+    : [];
+
 export const getVideoInfo = (filePath: string): Promise<{ duration: number; width: number; height: number }> => {
   return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
+    const command = ffmpeg(filePath).inputOptions(ffmpegInputOptions(filePath));
+    command.ffprobe((err, metadata) => {
       if (err) {
         logger.error(err, 'Error getting video info');
         reject(err);
@@ -86,6 +93,7 @@ export const transcodeToHls = async (
     }
 
     const qualities: IHlsQuality[] = [];
+    const spacesActive = await isS3Configured();
 
     // Transcode each quality
     for (const preset of applicablePresets) {
@@ -98,6 +106,7 @@ export const transcodeToHls = async (
 
       await new Promise((resolve, reject) => {
         ffmpeg(inputFilePath)
+          .inputOptions(ffmpegInputOptions(inputFilePath))
           .outputOptions([
             '-preset', 'fast',
             '-g', '48',
@@ -133,7 +142,9 @@ export const transcodeToHls = async (
       });
 
       const relativePlaylistPath = `hls/${mediaFile._id.toString()}/${preset.quality}/index.m3u8`;
-      const qualityUrl = `${baseUrl}/uploads/${relativePlaylistPath}`;
+      const qualityUrl = spacesActive
+        ? ''
+        : `${baseUrl.replace(/\/$/, '')}/uploads/${relativePlaylistPath}`;
 
       qualities.push({
         quality: preset.quality,
@@ -158,12 +169,28 @@ export const transcodeToHls = async (
     fs.writeFileSync(masterPlaylistPath, masterPlaylistContent);
 
     const relativeMasterPlaylistPath = `hls/${mediaFile._id.toString()}/index.m3u8`;
-    const masterPlaylistUrl = `${baseUrl}/uploads/${relativeMasterPlaylistPath}`;
+    let masterPlaylistUrl = `${baseUrl.replace(/\/$/, '')}/uploads/${relativeMasterPlaylistPath}`;
+
+    if (spacesActive) {
+      const s3Prefix = `hls/${mediaFile._id.toString()}`;
+      await uploadHlsFolderToS3(hlsOutputDir, s3Prefix);
+      const publicBase = await getHlsPublicBaseUrl();
+      masterPlaylistUrl = `${publicBase}/${relativeMasterPlaylistPath}`;
+      for (const q of qualities) {
+        q.url = `${publicBase}/hls/${mediaFile._id.toString()}/${q.quality}/index.m3u8`;
+        q.filePath = q.url;
+      }
+      try {
+        fs.rmSync(hlsOutputDir, { recursive: true, force: true });
+      } catch (cleanupErr) {
+        logger.warn({ cleanupErr }, 'Failed to clean local HLS temp folder after Spaces upload');
+      }
+    }
 
     // Update media file with HLS data
     mediaFile.isHls = true;
     mediaFile.hlsMasterPlaylistUrl = masterPlaylistUrl;
-    mediaFile.hlsMasterPlaylistPath = `/uploads/${relativeMasterPlaylistPath}`;
+    mediaFile.hlsMasterPlaylistPath = spacesActive ? masterPlaylistUrl : `/uploads/${relativeMasterPlaylistPath}`;
     mediaFile.hlsQualities = qualities;
     mediaFile.hlsStatus = 'completed';
     await mediaFile.save();

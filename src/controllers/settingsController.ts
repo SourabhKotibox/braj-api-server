@@ -3,6 +3,7 @@ import { SettingsModel } from '../models/Settings';
 import uploadHandler from '../lib/uploadHandler';
 import { updateEnvFile } from '../lib/envUpdater';
 import { sendWelcomeEmail } from '../lib/email';
+import { testSpacesConnection, applySpacesCors, isS3Configured } from '../lib/s3';
 
 async function getOrCreateSettings() {
   let settings = await SettingsModel.findOne();
@@ -41,6 +42,7 @@ export const getSettings = async (request: FastifyRequest, reply: FastifyReply) 
       const sensitiveFields = [
         'mailEmail', 'mailDriver', 'mailHost', 'mailPort', 'mailEncryption', 'mailUsername', 'mailPassword', 'mailFrom', 'mailFromName',
         'awsAccessKeyId', 'awsSecretAccessKey', 'awsRegion', 'awsBucket', 'awsPathStyleEndpoint', 'bunnyStorageZone', 'bunnyAccessKey',
+        'doSpacesAccessKey', 'doSpacesSecretKey', 'doSpacesRegion', 'doSpacesBucket',
         'fcmServerKey', 'fcmSenderId', 'firebaseApiKey', 'firebaseProjectId', 'firebaseAppId'
       ];
       for (const field of sensitiveFields) {
@@ -60,13 +62,23 @@ export const getSettings = async (request: FastifyRequest, reply: FastifyReply) 
 export const updateSettings = async (request: FastifyRequest, reply: FastifyReply) => {
   try {
     const body = request.body as Record<string, any>;
+
+    if (body.doSpacesEnabled === true || body.storageDriver === 'spaces') {
+      body.doSpacesEnabled = true;
+      body.storageDriver = 'spaces';
+      body.doSpacesPathStyleEndpoint = false;
+      if (body.doSpacesBrowserDirectUpload === undefined) {
+        body.doSpacesBrowserDirectUpload = true;
+      }
+    }
+
     const settings = await SettingsModel.findOneAndUpdate(
       {},
       { $set: body },
       { returnDocument: 'after', upsert: true }
     );
 
-    // Sync SMTP fields to .env so they're available as env vars immediately
+    // Sync SMTP + Spaces fields to .env so they're available as env vars immediately
     const envUpdates: Record<string, string> = {};
     if (body.mailHost !== undefined)     envUpdates.EMAIL_HOST     = body.mailHost;
     if (body.mailPort !== undefined)     envUpdates.EMAIL_PORT     = String(body.mailPort);
@@ -75,14 +87,34 @@ export const updateSettings = async (request: FastifyRequest, reply: FastifyRepl
     if (body.mailPassword !== undefined && body.mailPassword) envUpdates.EMAIL_PASS = body.mailPassword;
     if (body.mailFrom !== undefined)     envUpdates.EMAIL_FROM     = body.mailFrom;
     if (body.mailFromName !== undefined) envUpdates.EMAIL_FROM_NAME = body.mailFromName;
+    if (body.doSpacesAccessKey !== undefined) envUpdates.DO_SPACES_ACCESS_KEY = body.doSpacesAccessKey;
+    if (body.doSpacesSecretKey !== undefined && body.doSpacesSecretKey) envUpdates.DO_SPACES_SECRET_KEY = body.doSpacesSecretKey;
+    if (body.doSpacesRegion !== undefined) envUpdates.DO_SPACES_REGION = body.doSpacesRegion;
+    if (body.doSpacesBucket !== undefined) envUpdates.DO_SPACES_BUCKET = body.doSpacesBucket;
+    if (body.doSpacesCdnUrl !== undefined) envUpdates.DO_SPACES_CDN_URL = body.doSpacesCdnUrl;
+    if (body.storageDriver !== undefined) envUpdates.STORAGE_DRIVER = body.storageDriver;
 
     if (Object.keys(envUpdates).length > 0) {
       updateEnvFile(envUpdates);
     }
 
+    let storageTest: Awaited<ReturnType<typeof testSpacesConnection>> | undefined;
+    if (body.doSpacesEnabled || body.storageDriver === 'spaces' || body.doSpacesAccessKey || body.doSpacesBucket) {
+      storageTest = await testSpacesConnection();
+      if (storageTest.ok) {
+        try {
+          const origins = Array.from(new Set(['*', process.env.FRONTEND_URL, request.headers.origin].filter(Boolean) as string[]));
+          await applySpacesCors(origins);
+        } catch (corsError: any) {
+          console.warn('Could not apply Spaces CORS:', corsError?.message);
+        }
+      }
+    }
+
     return reply.send({
       success: true,
-      data: settings
+      data: settings,
+      storage: storageTest,
     });
   } catch (error: any) {
     console.error(error);
@@ -148,6 +180,23 @@ export const getEmailStatus = async (_request: FastifyRequest, reply: FastifyRep
     });
   } catch (error: any) {
     console.error(error);
+    return reply.status(500).send({ success: false, error: error.message });
+  }
+};
+
+export const getStorageStatus = async (_request: FastifyRequest, reply: FastifyReply) => {
+  try {
+    const result = await testSpacesConnection();
+    const configured = await isS3Configured();
+    return reply.send({
+      success: true,
+      data: {
+        ...result,
+        live: result.ok,
+        driver: configured ? 'spaces' : 'local',
+      },
+    });
+  } catch (error: any) {
     return reply.status(500).send({ success: false, error: error.message });
   }
 };

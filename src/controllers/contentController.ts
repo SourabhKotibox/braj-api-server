@@ -6,6 +6,7 @@ import { Types } from 'mongoose';
 import { logger } from '../lib/logger';
 import { createEpisodeSlices } from './categoryController';
 import { toLocalUploadPath } from '../services/videoProcessor';
+import uploadHandler from '../lib/uploadHandler';
 
 const syncSections = async (contentIdStr: string, sections: string[] | undefined) => {
   await SectionModel.updateMany(
@@ -268,23 +269,11 @@ export const appendContentVideo = async (request: FastifyRequest, reply: Fastify
           if (s > 0) seasonNumber = s;
         }
       } else if (part.type === 'file' && part.fieldname === 'videoFile') {
-        // Save file to a temp path for processing
-        const { writeFile } = await import('fs/promises');
-        const { join } = await import('path');
-        const { fileURLToPath } = await import('url');
-        const __filename = fileURLToPath(import.meta.url);
-        const __dirname = (await import('path')).dirname(__filename);
-        const uploadsDir = join(__dirname, '../../uploads/videos');
-        const { mkdirSync } = await import('fs');
-        mkdirSync(uploadsDir, { recursive: true });
-        const filename = `${Date.now()}_${part.filename}`;
-        const fullPath = join(uploadsDir, filename);
-        const chunks: Buffer[] = [];
-        for await (const chunk of part.file) {
-          chunks.push(chunk);
-        }
-        await writeFile(fullPath, Buffer.concat(chunks));
-        videoFilePath = `/uploads/videos/${filename}`;
+        const uploadedFile = await uploadHandler.saveFileFromPart(part, request, 'VIDEO', 'videos', {
+          trackInMediaLibrary: false,
+        });
+        videoFilePath = uploadedFile.s3Key || uploadedFile.filePath;
+        videoUrl = uploadedFile.url;
       }
     }
 

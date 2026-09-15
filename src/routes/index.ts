@@ -27,7 +27,8 @@ import audioArtistsRoutes from './audioArtists';
 import audioAlbumsRoutes from './audioAlbums';
 import mobileRoutes from './mobile';
 import videoMusicRoutes from './videoMusic';
-import publicMusicRoutes, { getAudioUrl, getVideoUrl } from './publicMusic';
+import publicMusicRoutes from './publicMusic';
+import relatedRoutes from './related';
 import adminUsersRoutes from './adminUsers';
 import sectionsRoutes from './sections';
 import contentsRoutes from './contents';
@@ -44,6 +45,8 @@ import webDownloadRoutes from './webDownload';
 import watchProgressRoutes from './watchProgress';
 import rewardRoutes from './rewardRoutes';
 import appNotificationRoutes from './appNotificationRoutes';
+import contestVideoRoutes from './contestVideos';
+import contestantRoutes from './contestants';
 
 import { getHomePage } from '../controllers/appHomeController';
 import { getAppBanners } from '../controllers/appHomeController';
@@ -94,6 +97,8 @@ const router: FastifyPluginAsync = async (fastify) => {
   fastify.register(audioAlbumsRoutes, { prefix: '/audio-albums' });
   fastify.register(mobileRoutes);
   fastify.register(videoMusicRoutes, { prefix: '/video-music' });
+  fastify.register(contestVideoRoutes, { prefix: '/contests' });
+  fastify.register(contestantRoutes, { prefix: '/contestants' });
   fastify.register(publicMusicRoutes);
   fastify.register(adminUsersRoutes, { prefix: '/admin-users' });
 
@@ -249,6 +254,139 @@ const router: FastifyPluginAsync = async (fastify) => {
         .select('title text type createdAt')
         .lean();
       return reply.send({ success: true, data: notifications });
+    } catch (error: any) {
+      return reply.status(500).send({ success: false, error: error.message });
+    }
+  });
+
+  // Public contests
+  fastify.get('/public/contests', async (request, reply) => {
+    try {
+      const { ContestVideoModel } = await import('../models/ContestVideo');
+      const query = request.query as any;
+      const page = Math.max(1, Number(query.page || 1));
+      const limit = Math.min(50, Math.max(1, Number(query.limit || 20)));
+      const filter: any = { status: 'published' };
+      if (query.featured === 'true') filter.featured = true;
+      if (query.trending === 'true') filter.trending = true;
+      if (query.genre) filter.genre = query.genre;
+      if (query.category) filter.category = query.category;
+      if (query.language) filter.language = query.language;
+      if (query.search) {
+        filter.$or = [
+          { title: new RegExp(query.search, 'i') },
+          { description: new RegExp(query.search, 'i') },
+        ];
+      }
+      const [videos, total] = await Promise.all([
+        ContestVideoModel.find(filter)
+          .populate('genre', 'name')
+          .sort(query.trending === 'true' ? { views: -1 } : { createdAt: -1 })
+          .skip((page - 1) * limit)
+          .limit(limit)
+          .lean(),
+        ContestVideoModel.countDocuments(filter),
+      ]);
+      return reply.send({
+        success: true,
+        data: videos.map((v: any) => ({ ...v, id: v._id?.toString() })),
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      });
+    } catch (error: any) {
+      return reply.status(500).send({ success: false, error: error.message });
+    }
+  });
+
+  fastify.get('/public/contests/:id', async (request, reply) => {
+    try {
+      const { ContestVideoModel } = await import('../models/ContestVideo');
+      const { ContestantModel } = await import('../models/Contestant');
+      const { id } = request.params as { id: string };
+      const video = await ContestVideoModel.findById(id)
+        .populate('genre', 'name')
+        .populate('category', 'name')
+        .populate('language', 'name')
+        .lean();
+      if (!video || video.status !== 'published') {
+        return reply.status(404).send({ success: false, error: 'Contest not found' });
+      }
+      const contestants = await ContestantModel.find({ contestVideoId: id, isActive: true })
+        .sort({ order: 1 })
+        .lean();
+      return reply.send({
+        success: true,
+        data: {
+          ...video,
+          id: video._id?.toString(),
+          contestants: contestants.map((c: any) => ({ ...c, id: c._id?.toString() })),
+        },
+      });
+    } catch (error: any) {
+      return reply.status(500).send({ success: false, error: error.message });
+    }
+  });
+
+  fastify.get('/public/contests/:id/contestants', async (request, reply) => {
+    try {
+      const { ContestVideoModel } = await import('../models/ContestVideo');
+      const { ContestantModel } = await import('../models/Contestant');
+      const { id } = request.params as { id: string };
+      const video = await ContestVideoModel.findById(id).lean();
+      if (!video || video.status !== 'published') {
+        return reply.status(404).send({ success: false, error: 'Contest not found' });
+      }
+      const contestants = await ContestantModel.find({ contestVideoId: id, isActive: true })
+        .sort({ order: 1, votes: -1 })
+        .lean();
+      return reply.send({
+        success: true,
+        data: contestants.map((c: any) => ({ ...c, id: c._id?.toString() })),
+      });
+    } catch (error: any) {
+      return reply.status(500).send({ success: false, error: error.message });
+    }
+  });
+
+  fastify.post('/public/contests/:id/purchase/initiate', async (request, reply) => {
+    try {
+      const { initiateContestPurchase } = await import('../controllers/contestVideoController');
+      return initiateContestPurchase(request, reply);
+    } catch (error: any) {
+      return reply.status(500).send({ success: false, error: error.message });
+    }
+  });
+
+  fastify.post('/public/contests/:id/purchase/verify', async (request, reply) => {
+    try {
+      const { verifyContestPurchase } = await import('../controllers/contestVideoController');
+      return verifyContestPurchase(request, reply);
+    } catch (error: any) {
+      return reply.status(500).send({ success: false, error: error.message });
+    }
+  });
+
+  fastify.get('/public/contests/:id/access', async (request, reply) => {
+    try {
+      const { checkContestAccess } = await import('../controllers/contestVideoController');
+      return checkContestAccess(request, reply);
+    } catch (error: any) {
+      return reply.status(500).send({ success: false, error: error.message });
+    }
+  });
+
+  fastify.post('/public/contestants/:id/vote', async (request, reply) => {
+    try {
+      const { voteContestant } = await import('../controllers/contestantController');
+      return voteContestant(request, reply);
+    } catch (error: any) {
+      return reply.status(500).send({ success: false, error: error.message });
+    }
+  });
+
+  fastify.get('/public/contestants/:contestVideoId/votes', async (request, reply) => {
+    try {
+      const { getContestVotes } = await import('../controllers/contestantController');
+      return getContestVotes(request, reply);
     } catch (error: any) {
       return reply.status(500).send({ success: false, error: error.message });
     }

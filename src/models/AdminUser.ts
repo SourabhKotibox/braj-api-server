@@ -26,6 +26,7 @@ export interface IModulePermissions {
   notificationTemplates: { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean };
   settings: { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean };
   reviews: { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean };
+  contests: { canView: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean };
 }
 
 export interface IAdminUser extends Document {
@@ -70,6 +71,7 @@ const defaultModulePermissions: IModulePermissions = {
   notificationTemplates: { canView: true, canCreate: false, canEdit: false, canDelete: false },
   settings: { canView: true, canCreate: false, canEdit: false, canDelete: false },
   reviews: { canView: true, canCreate: false, canEdit: false, canDelete: false },
+  contests: { canView: true, canCreate: false, canEdit: false, canDelete: false },
 };
 
 const AdminUserSchema = new Schema<IAdminUser>(
@@ -108,6 +110,7 @@ const AdminUserSchema = new Schema<IAdminUser>(
         notificationTemplates: { canView: Boolean, canCreate: Boolean, canEdit: Boolean, canDelete: Boolean },
         settings: { canView: Boolean, canCreate: Boolean, canEdit: Boolean, canDelete: Boolean },
         reviews: { canView: Boolean, canCreate: Boolean, canEdit: Boolean, canDelete: Boolean },
+        contests: { canView: Boolean, canCreate: Boolean, canEdit: Boolean, canDelete: Boolean },
       },
       default: defaultModulePermissions,
     },

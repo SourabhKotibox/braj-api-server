@@ -8,6 +8,7 @@ import { MediaFolderModel } from '../models/MediaFolder';
 import { Types } from 'mongoose';
 import { transcodeToHls } from './hlsTranscoder';
 import { logger } from './logger';
+import { isS3Configured, uploadToS3, deleteFromS3, getS3Settings, normalizeObjectKey } from './s3';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -89,6 +90,16 @@ export const UPLOAD_TYPES = {
     name: 'promotion',
     allowedExts: ['.jpg', '.jpeg', '.png', '.webp'],
     defaultDir: 'promotions'
+  },
+  ALBUM: {
+    name: 'album',
+    allowedExts: ['.jpg', '.jpeg', '.png', '.gif', '.webp'],
+    defaultDir: 'albums'
+  },
+  ARTIST: {
+    name: 'artist',
+    allowedExts: ['.jpg', '.jpeg', '.png', '.gif', '.webp'],
+    defaultDir: 'artists'
   }
 } as const;
 
@@ -102,7 +113,7 @@ export interface UploadedFileInfo {
   fileSize: number;
   mimeType: string;
   uploadType: UploadType;
-  storageType?: 'local' | 's3';
+  storageType?: 'local' | 's3' | 'spaces';
   s3Key?: string;
 }
 
@@ -139,6 +150,72 @@ const isVideoFile = (fileName: string, mimeType: string): boolean => {
   return videoExtensions.includes(ext) || mimeType.startsWith('video/');
 };
 
+type SaveFileOptions = {
+  trackInMediaLibrary?: boolean;
+  source?: string;
+  sourceId?: string;
+  folderId?: string;
+  contentName?: string;
+  contentType?: string;
+};
+
+const savePartDirectToSpaces = async (
+  part: any,
+  uploadType: UploadType,
+  fileName: string,
+  targetDir: string,
+  resolvedFolderId: string | undefined,
+  options?: SaveFileOptions
+): Promise<UploadedFileInfo> => {
+  const mimeType = part.mimetype || 'application/octet-stream';
+  const prefix = (targetDir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  const s3Key = `${prefix ? `${prefix}/` : ''}${fileName}`;
+  const spacesUrl = await uploadToS3(s3Key, part.file, mimeType);
+  const fileSize = Number(part.file?.bytesRead || 0);
+  const storageType = (await getS3Settings()).isSpaces ? 'spaces' : 's3';
+
+  const fileInfo: UploadedFileInfo = {
+    originalName: part.filename,
+    fileName,
+    filePath: spacesUrl,
+    url: spacesUrl,
+    fileSize,
+    mimeType,
+    uploadType,
+    storageType,
+    s3Key,
+  };
+
+  if (options?.trackInMediaLibrary !== false) {
+    try {
+      const mediaFile = await MediaFileModel.create({
+        name: part.filename,
+        url: spacesUrl,
+        filePath: spacesUrl,
+        fileSize,
+        fileType: mimeType,
+        folder: resolvedFolderId ? new Types.ObjectId(resolvedFolderId) : undefined,
+        source: options?.source || uploadType.toLowerCase(),
+        sourceId: options?.sourceId ? new Types.ObjectId(options.sourceId) : undefined,
+        contentName: options?.contentName,
+        contentType: options?.contentType,
+        storageType,
+        s3Key,
+      });
+
+      if (isVideoFile(part.filename, mimeType)) {
+        transcodeToHls(mediaFile._id.toString(), spacesUrl, spacesUrl).catch((err) => {
+          logger.error({ err, mediaFileId: mediaFile._id }, 'Failed to transcode video to HLS (Spaces)');
+        });
+      }
+    } catch (error) {
+      console.error('Failed to track file in media library:', error);
+    }
+  }
+
+  return fileInfo;
+};
+
 export const saveFileFromPart = async (
   part: any,
   request: FastifyRequest,
@@ -154,6 +231,9 @@ export const saveFileFromPart = async (
   }
 ): Promise<UploadedFileInfo> => {
   const typeConfig = UPLOAD_TYPES[uploadType];
+  if (!typeConfig) {
+    throw new Error(`Unknown upload type: ${String(uploadType)}`);
+  }
   const targetDir = customDir || typeConfig.defaultDir;
 
   if (!validateFileType(part.filename, uploadType)) {
@@ -176,6 +256,10 @@ export const saveFileFromPart = async (
   }
 
   const fileName = generateUniqueFileName(part.filename);
+  if (await isS3Configured()) {
+    return savePartDirectToSpaces(part, uploadType, fileName, targetDir, resolvedFolderId, options);
+  }
+
   ensureUploadDir(targetDir);
   const relativeFilePath = path.join(targetDir, fileName);
   const fullFilePath = path.join(UPLOADS_ROOT, relativeFilePath);
@@ -234,7 +318,7 @@ export const saveFileFromPart = async (
           fileSize: existingFile.fileSize,
           mimeType: existingFile.fileType,
           uploadType,
-          storageType: existingFile.storageType as 'local' | 's3',
+          storageType: existingFile.storageType as 'local' | 's3' | 'spaces',
           s3Key: existingFile.s3Key,
         });
       }
@@ -254,6 +338,8 @@ export const saveFileFromPart = async (
         storageType: 'local'
       };
 
+      // Local-only fallback. Spaces uploads are handled before this write stream.
+
       if (options?.trackInMediaLibrary !== false) {
         try {
           const mediaFile = await MediaFileModel.create({
@@ -268,7 +354,7 @@ export const saveFileFromPart = async (
             contentHash,
             contentName: options?.contentName,
             contentType: options?.contentType,
-            storageType: 'local'
+            storageType: fileInfo.storageType
           });
 
           if (isVideoFile(part.filename, part.mimetype || '')) {
@@ -288,8 +374,24 @@ export const saveFileFromPart = async (
   });
 };
 
-export const deleteUploadedFile = async (relativeFilePath: string, storageType?: 'local' | 's3') => {
+export const deleteUploadedFile = async (relativeFilePath: string, storageType?: 'local' | 's3' | 'spaces') => {
   if (!relativeFilePath) return;
+
+  if (
+    relativeFilePath.startsWith('http://') ||
+    relativeFilePath.startsWith('https://') ||
+    storageType === 's3' ||
+    storageType === 'spaces'
+  ) {
+    try {
+      const s3Settings = await getS3Settings();
+      await deleteFromS3(normalizeObjectKey(relativeFilePath, s3Settings.bucket));
+      return;
+    } catch (err) {
+      logger.error(err, 'Failed to delete file from S3/Spaces');
+      return;
+    }
+  }
 
   const fullPath = path.join(UPLOADS_ROOT, relativeFilePath.replace(/^\/*uploads\//, '').replace(/^\/+/, ''));
   if (fs.existsSync(fullPath)) {

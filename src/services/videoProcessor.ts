@@ -6,6 +6,7 @@ import { MovieModel } from '../models/Movie';
 import { EpisodeModel } from '../models/Episode';
 import { ContentModel } from '../models/Content';
 import { logger } from '../lib/logger';
+import { isS3Configured, uploadHlsFolderToS3, getHlsPublicBaseUrl } from '../lib/s3';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // All 7 quality renditions with Netflix-grade bitrate settings
@@ -86,6 +87,7 @@ const ensureDir = (dir: string) => {
 
 export const toLocalUploadPath = (urlPath: string): string | null => {
   if (!urlPath) return null;
+  if (/^https?:\/\//i.test(urlPath)) return null;
   const uploadsRoot = path.join(process.cwd(), 'uploads');
   let relPath = urlPath;
   if (relPath.startsWith('/uploads/')) relPath = relPath.replace('/uploads/', '');
@@ -93,6 +95,16 @@ export const toLocalUploadPath = (urlPath: string): string | null => {
   else if (relPath.startsWith('/media/')) relPath = relPath.replace('/', '');
   return path.join(uploadsRoot, relPath);
 };
+
+const resolveFfmpegInput = (sourceVideoUrl: string): string => {
+  if (/^https?:\/\//i.test(sourceVideoUrl)) return sourceVideoUrl;
+  const local = toLocalUploadPath(sourceVideoUrl);
+  if (local && fs.existsSync(local)) return local;
+  throw new Error(`Source video not found: ${sourceVideoUrl}`);
+};
+
+const ffmpegHttpArgs = (input: string): string[] =>
+  /^https?:\/\//i.test(input) ? ['-protocol_whitelist', 'file,http,https,tcp,tls,crypto'] : [];
 
 const getFolderSize = (folderPath: string): number => {
   try {
@@ -157,24 +169,23 @@ export const transcodeHlsMultiResolution = async (options: {
 }) => {
   const { id, type, sourceVideoUrl, startSeconds, duration, episodeNumber, contentIdForEpisode } = options;
 
-  // ── Resolve input path ──────────────────────────────────────────────────
-  const sourceVideoPath = toLocalUploadPath(sourceVideoUrl);
-  if (!sourceVideoPath || !fs.existsSync(sourceVideoPath)) {
-    throw new Error(`Source video not found: ${sourceVideoPath}`);
-  }
-  const ffmpegInput = sourceVideoPath;
+  // ── Resolve input path (local disk or DigitalOcean Spaces URL) ──────────
+  const ffmpegInput = resolveFfmpegInput(sourceVideoUrl);
 
   // ── Determine local HLS output folder ──────────────────────────────────
   const uploadsRoot = path.join(process.cwd(), 'uploads');
   let hlsFolder = '';
   let localUrlBase = '';
+  let s3Prefix = '';
 
   if (type === 'movie') {
     hlsFolder    = path.join(uploadsRoot, 'hls', 'movies', id);
     localUrlBase = `/uploads/hls/movies/${id}`;
+    s3Prefix     = `hls/movies/${id}`;
   } else {
     hlsFolder    = path.join(uploadsRoot, 'hls', contentIdForEpisode!, `episode-${episodeNumber}`);
     localUrlBase = `/uploads/hls/${contentIdForEpisode}/episode-${episodeNumber}`;
+    s3Prefix     = `hls/${contentIdForEpisode}/episode-${episodeNumber}`;
   }
 
   // Clear any existing HLS files to prevent mixing old and new uploads
@@ -194,7 +205,7 @@ export const transcodeHlsMultiResolution = async (options: {
   logger.info({ id, type, sourceHeight, qualityCount: qualities.length }, 'Starting HLS transcoding');
 
   // ── Build single-pass FFmpeg args ───────────────────────────────────────
-  const args: string[] = ['-y'];
+  const args: string[] = ['-y', ...ffmpegHttpArgs(ffmpegInput)];
 
   // Input seek (must come before -i for fast seek)
   if (startSeconds !== undefined && startSeconds > 0) {
@@ -264,16 +275,20 @@ export const transcodeHlsMultiResolution = async (options: {
   }
   fs.writeFileSync(path.join(hlsFolder, 'master.m3u8'), masterLines.join('\n'), 'utf-8');
 
-  // ── Upload to S3 (if configured) or keep local ─────────────────────────
+  // ── Upload to DigitalOcean Spaces (if configured) or keep local ─────────
+  const s3Active = await isS3Configured();
   const processedQualities = await finalizeHlsOutput({
     qualities,
     hlsFolder,
+    s3Active,
+    s3Prefix,
     localUrlBase,
   });
 
   return {
     hlsUrl: processedQualities.masterUrl,
     videoQualities: processedQualities.renditions,
+    hlsS3Prefix: s3Active ? s3Prefix : undefined,
   };
 };
 
@@ -300,7 +315,7 @@ const transcodeHlsSequential = async (opts: {
     const qFolder = path.join(hlsFolder, q.name);
     ensureDir(qFolder);
 
-    const args: string[] = ['-y'];
+    const args: string[] = ['-y', ...ffmpegHttpArgs(ffmpegInput)];
     if (startSeconds !== undefined && startSeconds > 0) args.push('-ss', String(startSeconds));
     args.push('-i', ffmpegInput);
     if (duration !== undefined && duration > 0) args.push('-t', String(duration));

@@ -2,13 +2,18 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { SectionModel } from '../models/Section';
 import { ContentModel } from '../models/Content';
 import { MovieModel } from '../models/Movie';
+import { ContestVideoModel } from '../models/ContestVideo';
 
 const syncManualContent = async (section: any) => {
   const sectionIdStr = section._id.toString();
   
-  // Remove this section from all contents
   if (section.contentType === 'movie') {
     await MovieModel.updateMany(
+      { sections: sectionIdStr },
+      { $pull: { sections: sectionIdStr } }
+    );
+  } else if (section.contentType === 'contest') {
+    await ContestVideoModel.updateMany(
       { sections: sectionIdStr },
       { $pull: { sections: sectionIdStr } }
     );
@@ -19,10 +24,14 @@ const syncManualContent = async (section: any) => {
     );
   }
   
-  // Add this section to the new manual content IDs
   if (section.manualContentIds && section.manualContentIds.length > 0) {
     if (section.contentType === 'movie') {
       await MovieModel.updateMany(
+        { _id: { $in: section.manualContentIds } },
+        { $addToSet: { sections: sectionIdStr } }
+      );
+    } else if (section.contentType === 'contest') {
+      await ContestVideoModel.updateMany(
         { _id: { $in: section.manualContentIds } },
         { $addToSet: { sections: sectionIdStr } }
       );
@@ -108,6 +117,11 @@ export const deleteSection = async (request: FastifyRequest, reply: FastifyReply
     }
     if (section.contentType === 'movie') {
       await MovieModel.updateMany(
+        { sections: section._id.toString() },
+        { $pull: { sections: section._id.toString() } }
+      );
+    } else if (section.contentType === 'contest') {
+      await ContestVideoModel.updateMany(
         { sections: section._id.toString() },
         { $pull: { sections: section._id.toString() } }
       );
