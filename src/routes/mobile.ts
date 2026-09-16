@@ -545,7 +545,8 @@ function formatSong(song: any) {
     isNew: song.isNewContent || false,
     isExclusive: song.isExclusive || false,
     downloadAllowed: song.downloadAllowed !== undefined ? song.downloadAllowed : true,
-    audioUrl: song.audioQualities?.[0]?.url || song.audioUrl || null,
+    // Prefer first quality URL; fall back to direct audioUrl; then HLS master (if only HLS is available yet).
+    audioUrl: song.audioQualities?.find((q: any) => q?.url)?.url || song.audioUrl || song.hlsUrl || null,
     hlsUrl: song.hlsUrl || null,
     planRequired: song.planRequired || 'free',
     createdAt: song.createdAt,
@@ -554,6 +555,10 @@ function formatSong(song: any) {
 }
 
 function formatVideo(video: any) {
+  const qualities: any[] = Array.isArray(video?.videoQualities) ? video.videoQualities : [];
+  const high = qualities.find((q) => q?.quality === '1080p' || q?.quality === '720p');
+  const firstWithUrl = qualities.find((q) => q?.url);
+
   return {
     id: video._id?.toString() || video.id,
     title: video.title,
@@ -569,7 +574,9 @@ function formatVideo(video: any) {
     trending: video.trending || false,
     featured: video.featured || false,
     isNew: video.isNewContent || false,
-    videoUrl: video.videoQualities?.[0]?.url || video.videoUrl,
+    // Prefer 1080p/720p URLs, then first available quality url, then direct url, then HLS master.
+    videoUrl: high?.url || firstWithUrl?.url || video.videoUrl || video.hlsUrl || null,
+    downloadAllowed: video.downloadAllowed !== undefined ? video.downloadAllowed : true,
     hlsUrl: video.hlsUrl,
     planRequired: video.planRequired || 'free',
     createdAt: video.createdAt,
