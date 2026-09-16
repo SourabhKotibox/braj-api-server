@@ -2,7 +2,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import mongoose from 'mongoose';
 import { AudioModel } from '../models/Audio';
 import { VideoMusicModel } from '../models/VideoMusic';
-import { getAudioPlaybackUrl, getAudioPlaybackUrls, getVideoPlaybackUrl, getVideoPlaybackUrls } from '../lib/resolvePlaybackUrl';
+import { getAudioPlaybackUrl, getAudioPlaybackUrls, getVideoPlaybackUrl, getVideoPlaybackUrls, normalizeMediaUrl } from '../lib/resolvePlaybackUrl';
 
 const isObjectId = (id?: string) =>
   !!id && mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === id;
@@ -13,7 +13,7 @@ const getVideoUrl = (video: any): string => getVideoPlaybackUrl(video);
 const formatAudio = (audio: any) => ({
   ...audio,
   id: audio._id?.toString() || audio.id,
-  originalAudioUrl: audio.audioUrl,
+  originalAudioUrl: normalizeMediaUrl(audio.audioUrl) || audio.audioUrl,
   audioUrl: getAudioUrl(audio),
   playbackUrls: getAudioPlaybackUrls(audio),
   thumbnail: audio.thumbnail || audio.coverImage || '',
@@ -23,8 +23,9 @@ const formatAudio = (audio: any) => ({
 const formatVideo = (video: any) => ({
   ...video,
   id: video._id?.toString() || video.id,
-  originalVideoUrl: video.videoUrl,
+  originalVideoUrl: normalizeMediaUrl(video.videoUrl) || video.videoUrl,
   videoUrl: getVideoUrl(video),
+  hlsUrl: normalizeMediaUrl(video.hlsUrl) || undefined,
   playbackUrls: getVideoPlaybackUrls(video),
   thumbnail: video.thumbnail || video.coverImage || '',
   coverImage: video.coverImage || video.thumbnail || '',

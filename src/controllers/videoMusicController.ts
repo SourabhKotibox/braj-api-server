@@ -2,9 +2,28 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { VideoMusicModel } from '../models/VideoMusic';
 import { logger } from '../lib/logger';
 import { buildRefUpdate, sanitizeRefFields } from '../lib/sanitizeRefs';
-import { getVideoPlaybackUrl } from '../lib/resolvePlaybackUrl';
+import { getVideoPlaybackUrl, normalizeMediaUrl } from '../lib/resolvePlaybackUrl';
 
 const getVideoUrl = (video: any): string => getVideoPlaybackUrl(video);
+
+function sanitizeVideoMediaFields(data: Record<string, any>) {
+  if ('videoUrl' in data) data.videoUrl = normalizeMediaUrl(data.videoUrl);
+  if ('hlsUrl' in data) {
+    const hls = normalizeMediaUrl(data.hlsUrl);
+    if (hls) data.hlsUrl = hls;
+    else delete data.hlsUrl;
+  }
+  if ('thumbnail' in data) data.thumbnail = normalizeMediaUrl(data.thumbnail) || data.thumbnail;
+  if ('coverImage' in data) data.coverImage = normalizeMediaUrl(data.coverImage) || data.coverImage;
+  if ('bannerImage' in data) data.bannerImage = normalizeMediaUrl(data.bannerImage) || data.bannerImage;
+  if (Array.isArray(data.videoQualities)) {
+    data.videoQualities = data.videoQualities.map((q: any) => ({
+      ...q,
+      url: normalizeMediaUrl(q?.url) || q?.url,
+    }));
+  }
+  return data;
+}
 
 export const getAllVideoMusics = async (request: FastifyRequest, reply: FastifyReply) => {
   try {
@@ -88,6 +107,7 @@ export const createVideoMusic = async (request: FastifyRequest, reply: FastifyRe
   try {
     const body = request.body as any;
     const { set: videoData } = sanitizeRefFields(body);
+    sanitizeVideoMediaFields(videoData);
 
     const isRawLocalVideo = videoData.videoUrl && !videoData.videoUrl.startsWith('http://') && !videoData.videoUrl.startsWith('https://');
 
@@ -118,6 +138,7 @@ export const updateVideoMusic = async (request: FastifyRequest, reply: FastifyRe
     const { id } = request.params as { id: string };
     const body = request.body as any;
     const update = buildRefUpdate(body);
+    if (update.$set) sanitizeVideoMediaFields(update.$set);
 
     if (!update.$set && !update.$unset) {
       return reply.status(400).send({ success: false, error: 'No fields to update' });

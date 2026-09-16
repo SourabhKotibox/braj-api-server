@@ -3,6 +3,26 @@ export function isHlsUrl(url?: string | null): boolean {
   return !!url && url.includes('.m3u8');
 }
 
+/** Fix double-prefixed media URLs like `/uploads/https://spaces...` or `site/uploads/https://...`. */
+export function normalizeMediaUrl(url?: string | null): string {
+  if (!url) return '';
+  let value = String(url).trim();
+
+  if (/example\.com\/playlist\.m3u8/i.test(value)) return '';
+
+  const matches = value.match(/https?:\/\/[^\s"']+/gi);
+  if (matches && matches.length > 1) {
+    value = matches[matches.length - 1];
+  } else if (matches && matches.length === 1 && !value.startsWith('http')) {
+    value = matches[0];
+  }
+
+  value = value.replace(/^https?:\/\/[^/]+\/uploads\/(https?:\/\/)/i, '$1');
+  value = value.replace(/^\/?uploads\/(https?:\/\/)/i, '$1');
+
+  return value;
+}
+
 /**
  * Ordered playback candidates: prefer full direct uploads (MP4 etc.) over HLS.
  * HLS is only used when no direct file is available.
@@ -10,15 +30,18 @@ export function isHlsUrl(url?: string | null): boolean {
 export function getVideoPlaybackUrls(video: {
   videoUrl?: string;
   hlsUrl?: string;
+  originalVideoUrl?: string;
   videoQualities?: Array<{ quality?: string; url?: string }>;
 }): string[] {
   const urls: string[] = [];
   const add = (u?: string | null) => {
-    if (!u || urls.includes(u)) return;
-    urls.push(u);
+    const cleaned = normalizeMediaUrl(u);
+    if (!cleaned || urls.includes(cleaned)) return;
+    urls.push(cleaned);
   };
 
   // 1. Original uploaded file (full length)
+  if (video.originalVideoUrl && !isHlsUrl(video.originalVideoUrl)) add(video.originalVideoUrl);
   if (video.videoUrl && !isHlsUrl(video.videoUrl)) add(video.videoUrl);
 
   // 2. Direct (non-HLS) quality entries
@@ -54,8 +77,9 @@ export function getAudioPlaybackUrls(audio: {
 }): string[] {
   const urls: string[] = [];
   const add = (u?: string | null) => {
-    if (!u || urls.includes(u)) return;
-    urls.push(u);
+    const cleaned = normalizeMediaUrl(u);
+    if (!cleaned || urls.includes(cleaned)) return;
+    urls.push(cleaned);
   };
 
   if (audio.audioUrl && !isHlsUrl(audio.audioUrl)) add(audio.audioUrl);
