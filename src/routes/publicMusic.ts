@@ -2,31 +2,20 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import mongoose from 'mongoose';
 import { AudioModel } from '../models/Audio';
 import { VideoMusicModel } from '../models/VideoMusic';
+import { getAudioPlaybackUrl, getAudioPlaybackUrls, getVideoPlaybackUrl, getVideoPlaybackUrls } from '../lib/resolvePlaybackUrl';
 
 const isObjectId = (id?: string) =>
   !!id && mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === id;
 
-const getAudioUrl = (audio: any): string => {
-  if (audio.audioQualities?.length) {
-    const high = audio.audioQualities.find((q: any) => q.quality === 'high');
-    const medium = audio.audioQualities.find((q: any) => q.quality === 'medium');
-    return high?.url || medium?.url || audio.audioQualities[0]?.url || audio.audioUrl || '';
-  }
-  return audio.audioUrl || audio.hlsUrl || '';
-};
-
-const getVideoUrl = (video: any): string => {
-  if (video.videoQualities?.length) {
-    const high = video.videoQualities.find((q: any) => q.quality === '1080p' || q.quality === '720p');
-    return high?.url || video.videoQualities[0]?.url || video.videoUrl || video.hlsUrl || '';
-  }
-  return video.videoUrl || video.hlsUrl || '';
-};
+const getAudioUrl = (audio: any): string => getAudioPlaybackUrl(audio);
+const getVideoUrl = (video: any): string => getVideoPlaybackUrl(video);
 
 const formatAudio = (audio: any) => ({
   ...audio,
   id: audio._id?.toString() || audio.id,
+  originalAudioUrl: audio.audioUrl,
   audioUrl: getAudioUrl(audio),
+  playbackUrls: getAudioPlaybackUrls(audio),
   thumbnail: audio.thumbnail || audio.coverImage || '',
   coverImage: audio.coverImage || audio.thumbnail || '',
 });
@@ -34,7 +23,9 @@ const formatAudio = (audio: any) => ({
 const formatVideo = (video: any) => ({
   ...video,
   id: video._id?.toString() || video.id,
+  originalVideoUrl: video.videoUrl,
   videoUrl: getVideoUrl(video),
+  playbackUrls: getVideoPlaybackUrls(video),
   thumbnail: video.thumbnail || video.coverImage || '',
   coverImage: video.coverImage || video.thumbnail || '',
 });

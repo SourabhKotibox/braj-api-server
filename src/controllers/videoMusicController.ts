@@ -2,14 +2,9 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { VideoMusicModel } from '../models/VideoMusic';
 import { logger } from '../lib/logger';
 import { buildRefUpdate, sanitizeRefFields } from '../lib/sanitizeRefs';
+import { getVideoPlaybackUrl } from '../lib/resolvePlaybackUrl';
 
-const getVideoUrl = (video: any): string => {
-  if (video.videoQualities && video.videoQualities.length > 0) {
-    const high = video.videoQualities.find((q: any) => q.quality === '1080p' || q.quality === '720p');
-    return high?.url || video.videoQualities[0]?.url || video.videoUrl || video.hlsUrl || '';
-  }
-  return video.videoUrl || video.hlsUrl || '';
-};
+const getVideoUrl = (video: any): string => getVideoPlaybackUrl(video);
 
 export const getAllVideoMusics = async (request: FastifyRequest, reply: FastifyReply) => {
   try {
