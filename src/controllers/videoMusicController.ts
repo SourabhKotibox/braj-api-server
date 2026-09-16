@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { VideoMusicModel } from '../models/VideoMusic';
 import { logger } from '../lib/logger';
+import { buildRefUpdate, sanitizeRefFields } from '../lib/sanitizeRefs';
 
 const getVideoUrl = (video: any): string => {
   if (video.videoQualities && video.videoQualities.length > 0) {
@@ -91,19 +92,21 @@ export const getVideoMusicById = async (request: FastifyRequest, reply: FastifyR
 export const createVideoMusic = async (request: FastifyRequest, reply: FastifyReply) => {
   try {
     const body = request.body as any;
-    const isRawLocalVideo = body.videoUrl && !body.videoUrl.startsWith('http://') && !body.videoUrl.startsWith('https://');
+    const { set: videoData } = sanitizeRefFields(body);
+
+    const isRawLocalVideo = videoData.videoUrl && !videoData.videoUrl.startsWith('http://') && !videoData.videoUrl.startsWith('https://');
 
     if (isRawLocalVideo) {
-      body.processingStatus = 'queued';
+      videoData.processingStatus = 'queued';
     } else {
-      body.processingStatus = 'ready';
+      videoData.processingStatus = 'ready';
     }
 
-    if ((!body.videoQualities || body.videoQualities.length === 0) && body.videoUrl) {
-      body.videoQualities = [{ quality: '720p', url: body.videoUrl, size: 0 }];
+    if ((!videoData.videoQualities || videoData.videoQualities.length === 0) && videoData.videoUrl) {
+      videoData.videoQualities = [{ quality: '720p', url: videoData.videoUrl, size: 0 }];
     }
 
-    const video = await VideoMusicModel.create(body);
+    const video = await VideoMusicModel.create(videoData);
 
     return reply.status(201).send({
       success: true,
@@ -119,8 +122,13 @@ export const updateVideoMusic = async (request: FastifyRequest, reply: FastifyRe
   try {
     const { id } = request.params as { id: string };
     const body = request.body as any;
+    const update = buildRefUpdate(body);
 
-    const video = await VideoMusicModel.findByIdAndUpdate(id, { $set: body }, { returnDocument: 'after', runValidators: true });
+    if (!update.$set && !update.$unset) {
+      return reply.status(400).send({ success: false, error: 'No fields to update' });
+    }
+
+    const video = await VideoMusicModel.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true });
 
     if (!video) {
       return reply.status(404).send({ success: false, error: 'Video music not found' });

@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { AudioModel } from '../models/Audio';
 import { logger } from '../lib/logger';
+import { buildRefUpdate, extractObjectId } from '../lib/sanitizeRefs';
 
 const getAudioUrl = (audio: any): string => {
   if (audio.audioQualities && audio.audioQualities.length > 0) {
@@ -113,9 +114,11 @@ export const createAudio = async (request: FastifyRequest, reply: FastifyReply) 
       bannerImage: body.bannerImage || '',
       audioUrl: body.audioUrl || '',
       duration: body.duration || 0,
-      genre: body.genre || undefined,
-      category: body.category || undefined,
-      language: body.language || undefined,
+      genre: extractObjectId(body.genre),
+      category: extractObjectId(body.category),
+      language: extractObjectId(body.language),
+      artistId: extractObjectId(body.artistId),
+      albumId: extractObjectId(body.albumId),
       tags: body.tags || [],
       status: body.status || 'draft',
       views: 0,
@@ -161,8 +164,13 @@ export const updateAudio = async (request: FastifyRequest, reply: FastifyReply) 
   try {
     const { id } = request.params as { id: string };
     const body = request.body as any;
+    const update = buildRefUpdate(body);
 
-    const audio = await AudioModel.findByIdAndUpdate(id, { $set: body }, { returnDocument: 'after', runValidators: true });
+    if (!update.$set && !update.$unset) {
+      return reply.status(400).send({ success: false, error: 'No fields to update' });
+    }
+
+    const audio = await AudioModel.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true });
 
     if (!audio) {
       return reply.status(404).send({ success: false, error: 'Audio not found' });

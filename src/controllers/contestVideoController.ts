@@ -5,6 +5,7 @@ import { ContestPurchaseModel } from '../models/ContestPurchase';
 import { UserModel } from '../models/User';
 import { SettingsModel } from '../models/Settings';
 import { logger } from '../lib/logger';
+import { buildRefUpdate, sanitizeRefFields } from '../lib/sanitizeRefs';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 
@@ -82,12 +83,13 @@ export const getContestVideoById = async (request: FastifyRequest, reply: Fastif
 export const createContestVideo = async (request: FastifyRequest, reply: FastifyReply) => {
   try {
     const body = request.body as any;
+    const { set: videoData } = sanitizeRefFields(body);
 
-    if (!body.title || !body.videoUrl) {
+    if (!videoData.title || !videoData.videoUrl) {
       return reply.status(400).send({ success: false, error: 'title and videoUrl are required' });
     }
 
-    const video = await ContestVideoModel.create(body);
+    const video = await ContestVideoModel.create(videoData);
 
     return reply.status(201).send({
       success: true,
@@ -103,8 +105,13 @@ export const updateContestVideo = async (request: FastifyRequest, reply: Fastify
   try {
     const { id } = request.params as { id: string };
     const body = request.body as any;
+    const update = buildRefUpdate(body);
 
-    const video = await ContestVideoModel.findByIdAndUpdate(id, { $set: body }, { returnDocument: 'after', runValidators: true });
+    if (!update.$set && !update.$unset) {
+      return reply.status(400).send({ success: false, error: 'No fields to update' });
+    }
+
+    const video = await ContestVideoModel.findByIdAndUpdate(id, update, { returnDocument: 'after', runValidators: true });
 
     if (!video) {
       return reply.status(404).send({ success: false, error: 'Contest video not found' });
