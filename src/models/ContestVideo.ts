@@ -81,7 +81,7 @@ const ContestVideoSchema = new Schema<IContestVideo>(
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
-ContestVideoSchema.index({ title: 'text', description: 'text', tags: 'text' });
+ContestVideoSchema.index({ title: 'text', description: 'text', tags: 'text' }, { language_override: 'dummy_lang_field' });
 ContestVideoSchema.index({ status: 1, featured: 1, trending: 1 });
 ContestVideoSchema.index({ genre: 1, category: 1, language: 1 });
 

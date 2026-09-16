@@ -145,7 +145,7 @@ const MovieSchema = new Schema<IMovie>(
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
-MovieSchema.index({ title: 'text', description: 'text', tags: 'text' });
+MovieSchema.index({ title: 'text', description: 'text', tags: 'text' }, { language_override: 'dummy_lang_field' });
 MovieSchema.index({ status: 1 });
 MovieSchema.index({ genres: 1 });
 MovieSchema.index({ categories: 1 });

@@ -128,7 +128,7 @@ const ContentSchema = new Schema<IContent>(
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
-ContentSchema.index({ title: 'text', description: 'text', tags: 'text' });
+ContentSchema.index({ title: 'text', description: 'text', tags: 'text' }, { language_override: 'dummy_lang_field' });
 ContentSchema.index({ status: 1, type: 1 });
 ContentSchema.index({ genres: 1 });
 ContentSchema.index({ trending: 1, featured: 1 });

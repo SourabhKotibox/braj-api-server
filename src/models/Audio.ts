@@ -99,7 +99,7 @@ const AudioSchema = new Schema<IAudio>(
   { timestamps: true }
 );
 
-AudioSchema.index({ title: 'text', artist: 'text', album: 'text', tags: 'text' });
+AudioSchema.index({ title: 'text', artist: 'text', album: 'text', tags: 'text' }, { language_override: 'dummy_lang_field' });
 AudioSchema.index({ status: 1 });
 AudioSchema.index({ genre: 1 });
 AudioSchema.index({ category: 1 });

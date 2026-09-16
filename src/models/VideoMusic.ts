@@ -94,7 +94,7 @@ const VideoMusicSchema = new Schema<IVideoMusic>(
   { timestamps: true }
 );
 
-VideoMusicSchema.index({ title: 'text', artist: 'text', album: 'text', tags: 'text' });
+VideoMusicSchema.index({ title: 'text', artist: 'text', album: 'text', tags: 'text' }, { language_override: 'dummy_lang_field' });
 VideoMusicSchema.index({ status: 1 });
 VideoMusicSchema.index({ genre: 1 });
 VideoMusicSchema.index({ category: 1 });
