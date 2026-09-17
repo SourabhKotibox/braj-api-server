@@ -8,7 +8,17 @@ import { GenreModel } from '../models/Genre';
 import { UserWatchProgressModel } from '../models/UserWatchProgress';
 import { ReviewModel } from '../models/Review';
 import { SettingsModel } from '../models/Settings';
+import { MediaFileModel } from '../models/MediaFile';
 import mongoose from 'mongoose';
+
+/** Format bytes into a human-readable string: B / KB / MB / GB / TB */
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const value = bytes / Math.pow(1024, i);
+  return `${value.toFixed(i >= 2 ? 2 : 0)} ${units[i]}`;
+}
 
 // Helper to determine date range
 const getDateFilter = (query: any) => {
@@ -62,12 +72,16 @@ export const getDashboardStats = async (request: FastifyRequest, reply: FastifyR
       totalContent,
       totalMovies,
       totalWalletTransactions,
+      storageResult,
     ] = await Promise.all([
       UserModel.countDocuments(),
       SubscriptionModel.countDocuments({ status: 'active' }),
       ContentModel.countDocuments(),
       MovieModel.countDocuments(),
       TransactionModel.countDocuments(),
+      MediaFileModel.aggregate([
+        { $group: { _id: null, totalBytes: { $sum: '$fileSize' }, totalFiles: { $sum: 1 } } },
+      ]),
     ]);
 
     const soonToExpire = await SubscriptionModel.countDocuments({
@@ -101,6 +115,9 @@ export const getDashboardStats = async (request: FastifyRequest, reply: FastifyR
     const decimals = settings?.decimalPlaces ?? 2;
     const formatValue = (val: number) => position === 'before' ? `${symbol}${val.toFixed(decimals)}` : `${val.toFixed(decimals)} ${symbol}`;
 
+    const totalStorageBytes = storageResult[0]?.totalBytes || 0;
+    const totalMediaFiles = storageResult[0]?.totalFiles || 0;
+
     return reply.send({
       success: true,
       data: {
@@ -108,7 +125,9 @@ export const getDashboardStats = async (request: FastifyRequest, reply: FastifyR
         totalSubscribers: activeSubscriptions,
         soonToExpire,
         totalReviews,
-        totalStorageUsage: 'Dynamic MB', // Placeholder for actual S3 calculation if needed
+        totalStorageUsage: formatBytes(totalStorageBytes),
+        totalStorageBytes,
+        totalMediaFiles,
         restContent: totalContent + totalMovies,
         subscriptionRevenue: formatValue(subscriptionRevenue),
         coinRevenue: formatValue(totalCoinRevenue),
