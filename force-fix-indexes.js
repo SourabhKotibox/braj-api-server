@@ -10,31 +10,36 @@ import { ContestVideoModel } from './src/models/ContestVideo.js';
 
 async function run() {
     try {
-        await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/brajcinema');
+        await mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/braj_ott');
         console.log('Connected to MongoDB');
 
+        console.log('Dropping indexes...');
         const models = [MovieModel, VideoMusicModel, AudioModel, ContentModel, ContestVideoModel];
-
+        
         for (const model of models) {
-            console.log(`Processing ${model.modelName}...`);
             try {
-                // Drop all non-_id indexes
                 await model.collection.dropIndexes();
-                console.log(`- Dropped old indexes for ${model.modelName}`);
+                console.log(`Dropped indexes for ${model.modelName}`);
             } catch (err) {
-                console.log(`- Note: Could not drop indexes for ${model.modelName} (might not exist):`, err.message);
+                console.log(`Could not drop indexes for ${model.modelName} (maybe none existed): ${err.message}`);
             }
-            
-            // Re-create indexes according to the new schema
-            await model.syncIndexes();
-            console.log(`- Synced new indexes for ${model.modelName}`);
         }
 
-        console.log('\nAll indexes fixed successfully! You can now create videos.');
+        console.log('Rebuilding indexes with the fixed schema (language_override)...');
+        for (const model of models) {
+            try {
+                await model.syncIndexes();
+                console.log(`Synced indexes for ${model.modelName}`);
+            } catch (err) {
+                console.error(`Failed to sync indexes for ${model.modelName}: ${err.message}`);
+            }
+        }
+
+        console.log('Done! You should no longer see the language override error.');
+        process.exit(0);
     } catch (e) {
-        console.error('Error:', e);
-    } finally {
-        await mongoose.disconnect();
+        console.error(e);
+        process.exit(1);
     }
 }
 run();

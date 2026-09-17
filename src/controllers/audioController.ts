@@ -147,7 +147,10 @@ export const createAudio = async (request: FastifyRequest, reply: FastifyReply) 
       audioData.audioQualities = [{ quality: 'high', url: audioData.audioUrl, bitrate: 320, size: 0 }];
     }
 
-    await syncHlsFromMediaFile(body, 'audioUrl', 'audio');
+    if (body.hlsUrl) audioData.hlsUrl = body.hlsUrl;
+    if (body.processingStatus) audioData.processingStatus = body.processingStatus;
+
+    await syncHlsFromMediaFile(audioData, 'audioUrl', 'audio');
     const audio = await AudioModel.create(audioData);
 
     return reply.status(201).send({
