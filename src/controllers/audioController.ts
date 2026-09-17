@@ -1,3 +1,4 @@
+import { syncHlsFromMediaFile } from '../lib/syncMediaFields';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { AudioModel } from '../models/Audio';
 import { logger } from '../lib/logger';
@@ -146,6 +147,7 @@ export const createAudio = async (request: FastifyRequest, reply: FastifyReply) 
       audioData.audioQualities = [{ quality: 'high', url: audioData.audioUrl, bitrate: 320, size: 0 }];
     }
 
+    await syncHlsFromMediaFile(body, 'audioUrl', 'audio');
     const audio = await AudioModel.create(audioData);
 
     return reply.status(201).send({
@@ -165,6 +167,7 @@ export const updateAudio = async (request: FastifyRequest, reply: FastifyReply) 
     const { id } = request.params as { id: string };
     const body = request.body as any;
     const update = buildRefUpdate(body);
+    if (update.$set) await syncHlsFromMediaFile(update.$set, 'audioUrl', 'audio');
 
     if (!update.$set && !update.$unset) {
       return reply.status(400).send({ success: false, error: 'No fields to update' });

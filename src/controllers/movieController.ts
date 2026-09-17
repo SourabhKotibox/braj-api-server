@@ -1,3 +1,4 @@
+import { syncHlsFromMediaFile } from '../lib/syncMediaFields';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { MovieModel } from '../models/Movie';
 import { SectionModel } from '../models/Section';
@@ -140,6 +141,7 @@ export const createMovie = async (request: FastifyRequest, reply: FastifyReply) 
     const body = request.body as any;
 
     // Check if the uploaded video is a raw MP4 or local media file
+    await syncHlsFromMediaFile(body, 'videoUrl', 'movie');
     const isLocalPath = body.hlsUrl && !body.hlsUrl.startsWith('http://') && !body.hlsUrl.startsWith('https://');
     const isRawLocalVideo = isLocalPath && !body.hlsUrl.endsWith('.m3u8');
     if (isRawLocalVideo) {
@@ -200,6 +202,7 @@ export const updateMovie = async (request: FastifyRequest, reply: FastifyReply) 
     }
 
     // Check if the hlsUrl has changed to a new raw MP4
+    await syncHlsFromMediaFile(body, 'videoUrl', 'movie');
     const isLocalPath = body.hlsUrl && !body.hlsUrl.startsWith('http://') && !body.hlsUrl.startsWith('https://');
     const isRawLocalVideo = isLocalPath && !body.hlsUrl.endsWith('.m3u8') && body.hlsUrl !== (existingMovie as any).hlsUrl;
     if (isRawLocalVideo) {
@@ -207,6 +210,8 @@ export const updateMovie = async (request: FastifyRequest, reply: FastifyReply) 
     } else if (body.hlsUrl) {
       body.processingStatus = 'ready';
     }
+
+    await syncHlsFromMediaFile(body, 'videoUrl', 'movie');
 
     const movie = await MovieModel.findByIdAndUpdate(
       id,

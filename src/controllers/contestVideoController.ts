@@ -1,3 +1,4 @@
+import { syncHlsFromMediaFile } from '../lib/syncMediaFields';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { ContestVideoModel } from '../models/ContestVideo';
 import { ContestantModel } from '../models/Contestant';
@@ -89,6 +90,7 @@ export const createContestVideo = async (request: FastifyRequest, reply: Fastify
       return reply.status(400).send({ success: false, error: 'title and videoUrl are required' });
     }
 
+    await syncHlsFromMediaFile(body, 'videoUrl', 'contest-video');
     const video = await ContestVideoModel.create(videoData);
 
     return reply.status(201).send({
@@ -106,6 +108,7 @@ export const updateContestVideo = async (request: FastifyRequest, reply: Fastify
     const { id } = request.params as { id: string };
     const body = request.body as any;
     const update = buildRefUpdate(body);
+    if (update.$set) await syncHlsFromMediaFile(update.$set, 'videoUrl', 'contest-video');
 
     if (!update.$set && !update.$unset) {
       return reply.status(400).send({ success: false, error: 'No fields to update' });
