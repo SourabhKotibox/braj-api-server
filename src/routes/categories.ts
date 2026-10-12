@@ -10,10 +10,10 @@ import {
 } from '../controllers/categoryController';
 
 const categories: FastifyPluginAsync = async (fastify) => {
-  // Get all categories
-  fastify.get('/', { onRequest: [requirePermission('categories', 'canView')] }, listCategories);
-  // Get single category
-  fastify.get('/item/:categoryId', { onRequest: [requirePermission('categories', 'canView')] }, getCategoryById);
+  // Get all categories - PUBLIC (used by web and mobile to filter content)
+  fastify.get('/', listCategories);
+  // Get single category - PUBLIC
+  fastify.get('/item/:categoryId', getCategoryById);
   // Create category
   fastify.post('/', { onRequest: [requirePermission('categories', 'canCreate')] }, createCategory);
   // Update category
