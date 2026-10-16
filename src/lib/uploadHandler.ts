@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { PassThrough } from 'stream';
 import type { FastifyRequest } from 'fastify';
 import { MediaFileModel } from '../models/MediaFile';
 import { MediaFolderModel } from '../models/MediaFolder';
@@ -170,8 +171,23 @@ const savePartDirectToSpaces = async (
   const mimeType = part.mimetype || 'application/octet-stream';
   const prefix = (targetDir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   const s3Key = `${prefix ? `${prefix}/` : ''}${fileName}`;
-  const spacesUrl = await uploadToS3(s3Key, part.file, mimeType);
-  const fileSize = Number(part.file?.bytesRead || 0);
+
+  // Pipe through a PassThrough to count bytes accurately.
+  // Directly reading part.file.bytesRead after upload is unreliable
+  // because the stream is already consumed by the S3 Upload client.
+  let fileSize = 0;
+  const counter = new PassThrough();
+  counter.on('data', (chunk: Buffer) => { fileSize += chunk.length; });
+  part.file.pipe(counter);
+
+  let spacesUrl: string;
+  try {
+    spacesUrl = await uploadToS3(s3Key, counter, mimeType);
+  } catch (err: any) {
+    logger.error({ err, s3Key, mimeType }, 'S3/Spaces upload failed in savePartDirectToSpaces');
+    throw new Error(`Upload to storage failed: ${err?.message || String(err)}`);
+  }
+
   const storageType = (await getS3Settings()).isSpaces ? 'spaces' : 's3';
 
   const fileInfo: UploadedFileInfo = {

@@ -343,38 +343,63 @@ export const uploadFilesToFolder = async (request: FastifyRequest, reply: Fastif
       return reply.status(404).send({ success: false, error: 'Folder not found' });
     }
 
-    const savedFiles = [];
-    let source = 'media-library';
-
     // Check if this folder has nested subfolders (Images, Videos)
     const subfolders = await MediaFolderModel.find({ parentFolder: folder._id });
     const imagesSubfolder = subfolders.find(sf => sf.name.toLowerCase() === 'images');
     const videosSubfolder = subfolders.find(sf => sf.name.toLowerCase() === 'videos');
 
+    // Two-pass multipart parsing: buffer all parts first so that text fields
+    // (like `source`) are always resolved before any file upload begins,
+    // regardless of their order in the form.
+    const fileParts: any[] = [];
+    const fields: Record<string, string> = {};
+
     const parts = request.parts();
     for await (const part of parts) {
-      if (part.type === 'file' && part.fieldname === 'file') {
-        let targetFolderId = id;
-        const isVideo = part.mimetype?.startsWith('video/') || part.filename.match(/\.(mp4|webm|mov|mkv|avi|flv)$/i);
-        const isImage = part.mimetype?.startsWith('image/') || part.filename.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i);
-
-        if (isVideo && videosSubfolder) {
-          targetFolderId = videosSubfolder._id.toString();
-        } else if (isImage && imagesSubfolder) {
-          targetFolderId = imagesSubfolder._id.toString();
+      if (part.type === 'file') {
+        // Buffer file data into memory so the stream is not lost after iteration
+        const chunks: Buffer[] = [];
+        for await (const chunk of part.file) {
+          chunks.push(chunk as Buffer);
         }
-
-        const customDir = `media/${targetFolderId}`;
-
-        const uploadedFile = await uploadHandler.saveFileFromPart(part, request, 'MEDIA_LIBRARY', customDir, {
-          trackInMediaLibrary: true,
-          source: source,
-          folderId: targetFolderId,
-        });
-        savedFiles.push(uploadedFile);
-      } else if (part.type === 'field' && part.fieldname === 'source') {
-        source = part.value as string;
+        fileParts.push({ ...part, _buffered: Buffer.concat(chunks) });
+      } else if (part.type === 'field') {
+        fields[part.fieldname] = part.value as string;
       }
+    }
+
+    const source = fields['source'] || 'media-library';
+    const savedFiles = [];
+
+    for (const part of fileParts) {
+      if (part.fieldname !== 'file') continue;
+
+      let targetFolderId = id;
+      const isVideo = part.mimetype?.startsWith('video/') || part.filename.match(/\.(mp4|webm|mov|mkv|avi|flv)$/i);
+      const isImage = part.mimetype?.startsWith('image/') || part.filename.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i);
+
+      if (isVideo && videosSubfolder) {
+        targetFolderId = videosSubfolder._id.toString();
+      } else if (isImage && imagesSubfolder) {
+        targetFolderId = imagesSubfolder._id.toString();
+      }
+
+      const customDir = `media/${targetFolderId}`;
+
+      // Reconstruct a part-like object with a Readable stream from the buffer
+      const { Readable } = await import('stream');
+      const fakeStream = Readable.from(part._buffered);
+      const fakePart = {
+        ...part,
+        file: Object.assign(fakeStream, { bytesRead: part._buffered.length }),
+      };
+
+      const uploadedFile = await uploadHandler.saveFileFromPart(fakePart, request, 'MEDIA_LIBRARY', customDir, {
+        trackInMediaLibrary: true,
+        source,
+        folderId: targetFolderId,
+      });
+      savedFiles.push(uploadedFile);
     }
 
     return reply.status(201).send({
