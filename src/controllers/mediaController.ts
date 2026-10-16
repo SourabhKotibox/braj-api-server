@@ -198,11 +198,20 @@ export const getFilesByFolder = async (request: FastifyRequest, reply: FastifyRe
 
     const files = await MediaFileModel.find({ folder: id }).sort({ createdAt: -1 }).lean();
     const filesWithSize = files.map((file) => {
-      let fileUrl = file.url;
-      let filePath = file.filePath;
+      let fileUrl = file.url || '';
+      let filePath = file.filePath || '';
       
-      if (file.storageType !== 's3') {
-        const normalizedPath = ensureUploadPath(file.filePath);
+      // Clean any accidental /uploads/ prefix in front of absolute remote URLs
+      if (filePath.includes('/uploads/http')) {
+        filePath = filePath.replace(/^.*\/uploads\/(https?:\/\/)/i, '$1');
+      }
+      if (fileUrl.includes('/uploads/http')) {
+        fileUrl = fileUrl.replace(/^.*\/uploads\/(https?:\/\/)/i, '$1');
+      }
+
+      const isRemote = file.storageType === 's3' || file.storageType === 'spaces' || filePath.startsWith('http://') || filePath.startsWith('https://');
+      if (!isRemote) {
+        const normalizedPath = ensureUploadPath(filePath);
         const protocol = request.protocol;
         const host = request.headers.host;
         fileUrl = `${protocol}://${host}${normalizedPath}`;
@@ -276,11 +285,20 @@ export const getAllMediaFiles = async (request: FastifyRequest, reply: FastifyRe
     ]);
 
     const filesWithSize = files.map((file) => {
-      let fileUrl = file.url;
-      let filePath = file.filePath;
+      let fileUrl = file.url || '';
+      let filePath = file.filePath || '';
       
-      if (file.storageType !== 's3') {
-        const normalizedPath = ensureUploadPath(file.filePath);
+      // Clean any accidental /uploads/ prefix in front of absolute remote URLs
+      if (filePath.includes('/uploads/http')) {
+        filePath = filePath.replace(/^.*\/uploads\/(https?:\/\/)/i, '$1');
+      }
+      if (fileUrl.includes('/uploads/http')) {
+        fileUrl = fileUrl.replace(/^.*\/uploads\/(https?:\/\/)/i, '$1');
+      }
+
+      const isRemote = file.storageType === 's3' || file.storageType === 'spaces' || filePath.startsWith('http://') || filePath.startsWith('https://');
+      if (!isRemote) {
+        const normalizedPath = ensureUploadPath(filePath);
         const protocol = request.protocol;
         const host = request.headers.host;
         fileUrl = `${protocol}://${host}${normalizedPath}`;
@@ -348,21 +366,39 @@ export const uploadFilesToFolder = async (request: FastifyRequest, reply: Fastif
     const imagesSubfolder = subfolders.find(sf => sf.name.toLowerCase() === 'images');
     const videosSubfolder = subfolders.find(sf => sf.name.toLowerCase() === 'videos');
 
-    // Two-pass multipart parsing: buffer all parts first so that text fields
-    // (like `source`) are always resolved before any file upload begins,
-    // regardless of their order in the form.
-    const fileParts: any[] = [];
+    // Two-pass multipart parsing using temp files on disk (avoids RAM exhaustion on large videos)
+    const tempDir = path.join(uploadsRoot, 'temp');
+    ensureDir(tempDir);
+
+    const fileParts: Array<{
+      fieldname: string;
+      filename: string;
+      mimetype: string;
+      tempFilePath: string;
+      fileSize: number;
+    }> = [];
     const fields: Record<string, string> = {};
 
     const parts = request.parts();
     for await (const part of parts) {
       if (part.type === 'file') {
-        // Buffer file data into memory so the stream is not lost after iteration
-        const chunks: Buffer[] = [];
-        for await (const chunk of part.file) {
-          chunks.push(chunk as Buffer);
-        }
-        fileParts.push({ ...part, _buffered: Buffer.concat(chunks) });
+        const safeName = path.basename(part.filename).replace(/[^a-zA-Z0-9.-]/g, '_');
+        const tempName = `up_${Date.now()}_${Math.random().toString(36).substring(2, 8)}_${safeName}`;
+        const tempFilePath = path.join(tempDir, tempName);
+        const ws = fs.createWriteStream(tempFilePath);
+        await new Promise<void>((resolve, reject) => {
+          part.file.pipe(ws);
+          ws.on('finish', resolve);
+          ws.on('error', reject);
+        });
+        const stats = fs.statSync(tempFilePath);
+        fileParts.push({
+          fieldname: part.fieldname,
+          filename: part.filename,
+          mimetype: part.mimetype,
+          tempFilePath,
+          fileSize: stats.size,
+        });
       } else if (part.type === 'field') {
         fields[part.fieldname] = part.value as string;
       }
@@ -386,12 +422,12 @@ export const uploadFilesToFolder = async (request: FastifyRequest, reply: Fastif
 
       const customDir = `media/${targetFolderId}`;
 
-      // Reconstruct a part-like object with a Readable stream from the buffer
-      const { Readable } = await import('stream');
-      const fakeStream = Readable.from(part._buffered);
       const fakePart = {
-        ...part,
-        file: Object.assign(fakeStream, { bytesRead: part._buffered.length }),
+        fieldname: part.fieldname,
+        filename: part.filename,
+        mimetype: part.mimetype,
+        tempFilePath: part.tempFilePath,
+        file: Object.assign(fs.createReadStream(part.tempFilePath), { bytesRead: part.fileSize }),
       };
 
       const uploadedFile = await uploadHandler.saveFileFromPart(fakePart, request, 'MEDIA_LIBRARY', customDir, {

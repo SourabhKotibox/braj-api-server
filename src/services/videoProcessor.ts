@@ -7,6 +7,7 @@ import { EpisodeModel } from '../models/Episode';
 import { ContentModel } from '../models/Content';
 import { logger } from '../lib/logger';
 import { isS3Configured, uploadHlsFolderToS3, getHlsPublicBaseUrl } from '../lib/s3';
+import { safeRemoveDir, checkDiskSpace } from '../lib/hlsCleanup';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // All 7 quality renditions with Netflix-grade bitrate settings
@@ -188,128 +189,163 @@ export const transcodeHlsMultiResolution = async (options: {
     s3Prefix     = `hls/${contentIdForEpisode}/episode-${episodeNumber}`;
   }
 
+  // ── Pre-flight disk space check ─────────────────────────────────────────
+  const minFreeGb = Number(process.env.MIN_FREE_DISK_GB ?? 2);
+  const diskOk = await checkDiskSpace(uploadsRoot, minFreeGb);
+  if (!diskOk) {
+    throw new Error(`Insufficient disk space (< ${minFreeGb} GB free). Job ${id} refused.`);
+  }
+
   // Clear any existing HLS files to prevent mixing old and new uploads
   if (fs.existsSync(hlsFolder)) {
     try {
       fs.rmSync(hlsFolder, { recursive: true, force: true });
     } catch (rmErr) {
-      logger.warn({ rmErr, hlsFolder }, 'Failed to clear existing HLS folder');
+      logger.warn({ rmErr, hlsFolder }, 'Failed to clear existing HLS folder before processing');
     }
   }
   ensureDir(hlsFolder);
 
-  // ── Detect source resolution & filter quality ladder ───────────────────
-  const sourceRes = await probeResolution(ffmpegInput);
+  logger.info(`[HLS] Processing started: ${id}`);
+  logger.info(`[HLS] HLS directory created: ${hlsFolder}`);
+
+  // ── Detect source resolution & duration & filter quality ladder ──────────
+  const [sourceRes, sourceDuration] = await Promise.all([
+    probeResolution(ffmpegInput),
+    getVideoDurationSeconds(ffmpegInput),
+  ]);
   const sourceHeight = sourceRes?.height ?? 2160; // assume max if detection fails
   const qualities = filterQualitiesByResolution(sourceHeight, HLS_QUALITY_LADDER);
-  logger.info({ id, type, sourceHeight, qualityCount: qualities.length }, 'Starting HLS transcoding');
+  logger.info({ id, type, sourceHeight, sourceDuration, qualityCount: qualities.length }, '[HLS] Transcoding started');
 
-  // ── Build single-pass FFmpeg args ───────────────────────────────────────
-  const args: string[] = ['-y', ...ffmpegHttpArgs(ffmpegInput)];
+  let processingError: Error | null = null;
 
-  // Input seek (must come before -i for fast seek)
-  if (startSeconds !== undefined && startSeconds > 0) {
-    args.push('-ss', String(startSeconds));
-  }
-  args.push('-i', ffmpegInput);
-  if (duration !== undefined && duration > 0) {
-    args.push('-t', String(duration));
-  }
-
-  // Build filter_complex: split video and scale each output stream
-  const n = qualities.length;
-  const splitOutputs = qualities.map((_, i) => `[temp${i}]`).join('');
-  const scaleFilters = qualities.map((q, i) => `[temp${i}]scale=${q.width}:${q.height}[v${i}]`).join(';');
-  const filterComplexString = `[0:v]split=${n}${splitOutputs};${scaleFilters}`;
-  args.push('-filter_complex', filterComplexString);
-
-  // Map each video stream, then audio
-  qualities.forEach((q, i) => {
-    args.push(
-      `-map`, `[v${i}]`,
-      `-c:v:${i}`, 'libx264',
-      `-b:v:${i}`, q.bitrate,
-      `-maxrate:v:${i}`, q.maxrate,
-      `-bufsize:v:${i}`, q.bufsize,
-      `-preset:v:${i}`, 'veryfast',
-      `-profile:v:${i}`, 'main',
-      `-map`, '0:a:0',
-      `-c:a:${i}`, 'aac',
-      `-b:a:${i}`, q.audioBitrate,
-      `-ar:a:${i}`, '48000',
-    );
-  });
-
-  // var_stream_map — pairs each video track with audio track
-  const streamMap = qualities.map((_, i) => `v:${i},a:${i},name:${qualities[i].name}`).join(' ');
-  args.push(
-    '-var_stream_map', streamMap,
-    '-master_pl_name', 'master.m3u8',
-    '-f', 'hls',
-    '-hls_time', '6',
-    '-hls_playlist_type', 'vod',
-    '-hls_flags', 'independent_segments',
-    '-hls_segment_filename', path.join(hlsFolder, '%v/segment_%03d.ts'),
-    path.join(hlsFolder, '%v/playlist.m3u8'),
-  );
-
-  // ── Run FFmpeg ──────────────────────────────────────────────────────────
   try {
-    await runCommand('ffmpeg', args);
-  } catch (err: any) {
-    logger.error({ err, id, type }, 'FFmpeg single-pass failed — falling back to sequential');
-    // Fallback: process each quality sequentially (avoids OOM on low-RAM EC2)
-    return transcodeHlsSequential({ id, type, sourceVideoUrl, startSeconds, duration, episodeNumber, contentIdForEpisode, qualities, hlsFolder, s3Prefix, localUrlBase, ffmpegInput });
-  }
+    // ── Build single-pass FFmpeg args ───────────────────────────────────────
+    const args: string[] = ['-y', ...ffmpegHttpArgs(ffmpegInput)];
 
-  // ── Build master.m3u8 ───────────────────────────────────────────────────
-  // FFmpeg creates it automatically, but we rebuild it to ensure correct paths
-  const masterLines = ['#EXTM3U', '#EXT-X-VERSION:3'];
-  for (const q of qualities) {
-    const bandwidth  = BANDWIDTH_MAP[q.name as QualityName];
-    const resolution = RESOLUTION_MAP[q.name as QualityName];
-    masterLines.push(
-      `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution},NAME="${q.name}"`,
-      `${q.name}/playlist.m3u8`,
+    // Input seek (must come before -i for fast seek)
+    if (startSeconds !== undefined && startSeconds > 0) {
+      args.push('-ss', String(startSeconds));
+    }
+    args.push('-i', ffmpegInput);
+    if (duration !== undefined && duration > 0) {
+      args.push('-t', String(duration));
+    }
+
+    // Build filter_complex: split video and scale each output stream
+    const n = qualities.length;
+    const splitOutputs = qualities.map((_, i) => `[temp${i}]`).join('');
+    const scaleFilters = qualities.map((q, i) => `[temp${i}]scale=${q.width}:${q.height}[v${i}]`).join(';');
+    const filterComplexString = `[0:v]split=${n}${splitOutputs};${scaleFilters}`;
+    args.push('-filter_complex', filterComplexString);
+
+    // Map each video stream, then audio
+    qualities.forEach((q, i) => {
+      args.push(
+        `-map`, `[v${i}]`,
+        `-c:v:${i}`, 'libx264',
+        `-b:v:${i}`, q.bitrate,
+        `-maxrate:v:${i}`, q.maxrate,
+        `-bufsize:v:${i}`, q.bufsize,
+        `-preset:v:${i}`, 'veryfast',
+        `-profile:v:${i}`, 'main',
+        `-map`, '0:a:0',
+        `-c:a:${i}`, 'aac',
+        `-b:a:${i}`, q.audioBitrate,
+        `-ar:a:${i}`, '48000',
+      );
+    });
+
+    // var_stream_map — pairs each video track with audio track
+    const streamMap = qualities.map((_, i) => `v:${i},a:${i},name:${qualities[i].name}`).join(' ');
+    args.push(
+      '-var_stream_map', streamMap,
+      '-master_pl_name', 'master.m3u8',
+      '-f', 'hls',
+      '-hls_time', '6',
+      '-hls_playlist_type', 'vod',
+      '-hls_flags', 'independent_segments',
+      '-hls_segment_filename', path.join(hlsFolder, '%v/segment_%03d.ts'),
+      path.join(hlsFolder, '%v/playlist.m3u8'),
     );
+
+    // ── Run FFmpeg ──────────────────────────────────────────────────────────
+    try {
+      await runCommand('ffmpeg', args);
+      logger.info({ id, type }, '[HLS] Single-pass FFmpeg completed');
+    } catch (err: any) {
+      logger.error({ err, id, type }, '[HLS] FFmpeg single-pass failed — falling back to sequential');
+      // Fallback: process each quality sequentially (avoids OOM on low-RAM EC2)
+      // This fallback can also throw — let it propagate to the outer catch.
+      await transcodeHlsSequentialInner({ startSeconds, duration, qualities, hlsFolder, ffmpegInput });
+    }
+
+    // ── Build master.m3u8 ───────────────────────────────────────────────────
+    const masterLines = ['#EXTM3U', '#EXT-X-VERSION:3'];
+    for (const q of qualities) {
+      const bandwidth  = BANDWIDTH_MAP[q.name as QualityName];
+      const resolution = RESOLUTION_MAP[q.name as QualityName];
+      masterLines.push(
+        `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},RESOLUTION=${resolution},NAME="${q.name}"`,
+        `${q.name}/playlist.m3u8`,
+      );
+    }
+    fs.writeFileSync(path.join(hlsFolder, 'master.m3u8'), masterLines.join('\n'), 'utf-8');
+
+    // ── Upload to DigitalOcean Spaces (if configured) or keep local ─────────
+    const s3Active = await isS3Configured();
+    const processedQualities = await finalizeHlsOutput({
+      id,
+      qualities,
+      hlsFolder,
+      s3Active,
+      s3Prefix,
+      localUrlBase,
+    });
+
+    logger.info(`[HLS] Processing completed: ${id}`);
+
+    return {
+      hlsUrl: processedQualities.masterUrl,
+      videoQualities: processedQualities.renditions,
+      hlsS3Prefix: s3Active ? s3Prefix : undefined,
+      duration: sourceDuration ? Math.round(sourceDuration) : undefined,
+    };
+
+  } catch (err: any) {
+    processingError = err instanceof Error ? err : new Error(String(err));
+    logger.error({ err, id, type }, `[HLS] Processing failed: ${id}`);
+    throw processingError;
+  } finally {
+    // Always remove local HLS temp folder when using Spaces.
+    // In local-only mode the folder is permanent storage — do not delete it.
+    const s3Active = await isS3Configured().catch(() => false);
+    if (s3Active) {
+      // Only delete if upload succeeded (folder still exists) OR if this is a failure cleanup.
+      // safeRemoveDir is a no-op if the folder was already deleted by finalizeHlsOutput.
+      if (processingError !== null) {
+        // Failed job — always clean up partial files
+        logger.info(`[HLS] Cleaning local files after failure: ${id}`);
+        await safeRemoveDir(hlsFolder, id);
+      }
+      // On success, finalizeHlsOutput already deleted the folder.
+    }
   }
-  fs.writeFileSync(path.join(hlsFolder, 'master.m3u8'), masterLines.join('\n'), 'utf-8');
-
-  // ── Upload to DigitalOcean Spaces (if configured) or keep local ─────────
-  const s3Active = await isS3Configured();
-  const processedQualities = await finalizeHlsOutput({
-    qualities,
-    hlsFolder,
-    s3Active,
-    s3Prefix,
-    localUrlBase,
-  });
-
-  return {
-    hlsUrl: processedQualities.masterUrl,
-    videoQualities: processedQualities.renditions,
-    hlsS3Prefix: s3Active ? s3Prefix : undefined,
-  };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sequential fallback (one quality at a time — safer on low-RAM servers)
+// Sequential fallback inner (one quality at a time — safer on low-RAM servers)
+// Throws on failure; called from within the outer try block so cleanup happens.
 // ─────────────────────────────────────────────────────────────────────────────
-const transcodeHlsSequential = async (opts: {
-  id: string;
-  type: 'movie' | 'episode';
-  sourceVideoUrl: string;
+const transcodeHlsSequentialInner = async (opts: {
   startSeconds?: number;
   duration?: number;
-  episodeNumber?: number;
-  contentIdForEpisode?: string;
   qualities: ReadonlyArray<typeof HLS_QUALITY_LADDER[number]>;
   hlsFolder: string;
-  s3Prefix: string;
-  localUrlBase: string;
   ffmpegInput: string;
 }) => {
-  const { startSeconds, duration, qualities, hlsFolder, s3Prefix, localUrlBase, ffmpegInput } = opts;
+  const { startSeconds, duration, qualities, hlsFolder, ffmpegInput } = opts;
 
   for (const q of qualities) {
     const qFolder = path.join(hlsFolder, q.name);
@@ -339,7 +375,7 @@ const transcodeHlsSequential = async (opts: {
     );
 
     await runCommand('ffmpeg', args);
-    logger.info({ quality: q.name }, 'Sequential quality encoded');
+    logger.info({ quality: q.name }, '[HLS] Sequential quality encoded');
   }
 
   // Rebuild master.m3u8
@@ -353,32 +389,30 @@ const transcodeHlsSequential = async (opts: {
     );
   }
   fs.writeFileSync(path.join(hlsFolder, 'master.m3u8'), masterLines.join('\n'), 'utf-8');
-
-  const s3Active = await isS3Configured();
-  const out = await finalizeHlsOutput({ qualities, hlsFolder, s3Active, s3Prefix, localUrlBase });
-  return {
-    hlsUrl:          out.masterUrl,
-    videoQualities:  out.renditions,
-    hlsS3Prefix:     s3Active ? s3Prefix : undefined,
-  };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Finalize: Upload to S3 (or keep local), return URL map
+// IMPORTANT: Local cleanup happens ONLY after a confirmed successful upload.
+// If upload throws, the error propagates — the caller's finally block will
+// then clean up the local folder.
 // ─────────────────────────────────────────────────────────────────────────────
 const finalizeHlsOutput = async (opts: {
+  id: string;
   qualities: ReadonlyArray<typeof HLS_QUALITY_LADDER[number]>;
   hlsFolder: string;
   s3Active: boolean;
   s3Prefix: string;
   localUrlBase: string;
 }) => {
-  const { qualities, hlsFolder, s3Active, s3Prefix, localUrlBase } = opts;
+  const { id, qualities, hlsFolder, s3Active, s3Prefix, localUrlBase } = opts;
 
   if (s3Active) {
-    // Upload all .ts segments + .m3u8 playlists to S3
-    logger.info({ s3Prefix }, 'Uploading HLS folder to S3…');
+    // Upload all .ts segments + .m3u8 playlists to Spaces.
+    // uploadHlsFolderToS3 THROWS on any upload error — we never swallow it.
+    logger.info(`[HLS] Upload to Spaces started: ${id}`);
     await uploadHlsFolderToS3(hlsFolder, s3Prefix);
+    logger.info(`[HLS] Upload to Spaces completed: ${id}`);
 
     const baseUrl = await getHlsPublicBaseUrl();
     const masterUrl = `${baseUrl}/${s3Prefix}/master.m3u8`;
@@ -389,13 +423,9 @@ const finalizeHlsOutput = async (opts: {
       size: getFolderSize(path.join(hlsFolder, q.name)),
     }));
 
-    // Clean up local temp files to save disk space
-    try {
-      fs.rmSync(hlsFolder, { recursive: true, force: true });
-      logger.info({ hlsFolder }, 'Cleaned up local HLS temp files after S3 upload');
-    } catch (cleanupErr) {
-      logger.warn({ cleanupErr }, 'Failed to clean up local HLS temp folder');
-    }
+    // Only delete local files AFTER the upload is confirmed successful
+    logger.info(`[HLS] Cleaning local files: ${id}`);
+    await safeRemoveDir(hlsFolder, id);
 
     return { masterUrl, renditions };
   } else {
@@ -414,11 +444,16 @@ const finalizeHlsOutput = async (opts: {
 // Public processors — Movies
 // ─────────────────────────────────────────────────────────────────────────────
 export const processMovieHls = async (movieId: Types.ObjectId | string, sourceVideoUrl: string) => {
+  const id = movieId.toString();
+  const uploadsRoot = path.join(process.cwd(), 'uploads');
+  const hlsFolder = path.join(uploadsRoot, 'hls', 'movies', id);
+
+  logger.info(`[HLS] Movie processing started: ${id}`);
   try {
     await MovieModel.findByIdAndUpdate(movieId, { processingStatus: 'processing' });
 
     const result = await transcodeHlsMultiResolution({
-      id: movieId.toString(),
+      id,
       type: 'movie',
       sourceVideoUrl,
     });
@@ -431,15 +466,24 @@ export const processMovieHls = async (movieId: Types.ObjectId | string, sourceVi
       status:          'published',
       processingStatus:'ready',
       processingError: null,
+      ...(result.duration ? { duration: result.duration } : {}),
     });
 
-    logger.info({ movieId, hlsUrl: result.hlsUrl }, 'Movie HLS processing complete');
+    logger.info({ movieId, hlsUrl: result.hlsUrl, duration: result.duration }, '[HLS] Movie HLS processing complete');
   } catch (error: any) {
-    logger.error({ error, movieId }, 'Error processing movie HLS');
+    // The original FFmpeg/upload error is logged here.
+    // Cleanup of local HLS files happens inside transcodeHlsMultiResolution's finally block.
+    logger.error({ error, movieId }, '[HLS] Error processing movie HLS');
     await MovieModel.findByIdAndUpdate(movieId, {
       processingStatus: 'failed',
       processingError:  error.message,
     });
+    // Belt-and-suspenders: if something went wrong before the hlsFolder was
+    // even created inside transcodeHlsMultiResolution, safeRemoveDir is a no-op.
+    const s3Active = await isS3Configured().catch(() => false);
+    if (s3Active) {
+      await safeRemoveDir(hlsFolder, `movie-${id}-fallback-cleanup`);
+    }
   }
 };
 
@@ -453,14 +497,21 @@ export const processMovieInBackground = (movieId: Types.ObjectId | string, sourc
 // Public processors — Episodes
 // ─────────────────────────────────────────────────────────────────────────────
 export const processEpisodeHls = async (episodeId: Types.ObjectId | string, sourceVideoUrl: string) => {
+  const id = episodeId.toString();
+  logger.info(`[HLS] Episode processing started: ${id}`);
+
+  let hlsFolder = '';
   try {
     const episode = await EpisodeModel.findById(episodeId).lean();
     if (!episode) return;
 
+    const uploadsRoot = path.join(process.cwd(), 'uploads');
+    hlsFolder = path.join(uploadsRoot, 'hls', episode.contentId.toString(), `episode-${episode.episode}`);
+
     await EpisodeModel.findByIdAndUpdate(episodeId, { processingStatus: 'processing' });
 
     const result = await transcodeHlsMultiResolution({
-      id:                   episodeId.toString(),
+      id,
       type:                 'episode',
       sourceVideoUrl,
       startSeconds:         episode.sourceStartSeconds,
@@ -469,14 +520,7 @@ export const processEpisodeHls = async (episodeId: Types.ObjectId | string, sour
       contentIdForEpisode:  episode.contentId.toString(),
     });
 
-    let actualDuration: number | undefined;
-    const localHlsPath = toLocalUploadPath(result.hlsUrl);
-    if (localHlsPath && fs.existsSync(localHlsPath)) {
-      const durationSecs = await getVideoDurationSeconds(localHlsPath);
-      if (durationSecs && Number.isFinite(durationSecs)) {
-        actualDuration = Math.round(durationSecs);
-      }
-    }
+    const finalDuration = result.duration || episode.duration;
 
     await EpisodeModel.findByIdAndUpdate(episodeId, {
       hlsUrl:          result.hlsUrl,
@@ -484,16 +528,23 @@ export const processEpisodeHls = async (episodeId: Types.ObjectId | string, sour
       videoQualities:  result.videoQualities,
       processingStatus:'ready',
       processingError: null,
-      ...(actualDuration ? { duration: actualDuration } : {}),
+      ...(finalDuration ? { duration: finalDuration } : {}),
     });
 
-    logger.info({ episodeId, hlsUrl: result.hlsUrl }, 'Episode HLS processing complete');
+    logger.info({ episodeId, hlsUrl: result.hlsUrl, duration: finalDuration }, '[HLS] Episode HLS processing complete');
   } catch (error: any) {
-    logger.error({ error, episodeId }, 'Error processing episode HLS');
+    logger.error({ error, episodeId }, '[HLS] Error processing episode HLS');
     await EpisodeModel.findByIdAndUpdate(episodeId, {
       processingStatus: 'failed',
       processingError:  error.message,
     });
+    // Belt-and-suspenders fallback cleanup
+    if (hlsFolder) {
+      const s3Active = await isS3Configured().catch(() => false);
+      if (s3Active) {
+        await safeRemoveDir(hlsFolder, `episode-${id}-fallback-cleanup`);
+      }
+    }
   }
 };
 
@@ -561,11 +612,7 @@ export const autoDetectAndSyncQualities = async (
           await uploadHlsFolderToS3(hlsFolder, s3Prefix);
           uploadSucceeded = true;
           logger.info({ id: id.toString(), type }, 'Auto-detect: S3 upload successful. Cleaning up local files.');
-          try {
-            fs.rmSync(hlsFolder, { recursive: true, force: true });
-          } catch (rmErr) {
-            logger.warn({ rmErr }, 'Failed to clean up local folder after sync upload');
-          }
+          await safeRemoveDir(hlsFolder, `auto-detect-${id}`);
         } catch (uploadErr) {
           logger.error({ uploadErr, id: id.toString() }, 'Auto-detect: Failed to upload HLS to S3, falling back to local files.');
         }

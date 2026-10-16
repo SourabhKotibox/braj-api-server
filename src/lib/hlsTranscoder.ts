@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { MediaFileModel, IHlsQuality } from '../models/MediaFile';
 import { logger } from './logger';
 import { getHlsPublicBaseUrl, isS3Configured, uploadHlsFolderToS3 } from './s3';
+import { safeRemoveDir, checkDiskSpace } from './hlsCleanup';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,13 +48,14 @@ export const getVideoInfo = (filePath: string): Promise<{ duration: number; widt
         reject(err);
         return;
       }
-      const stream = metadata.streams.find(s => s.codec_type === 'video');
+      const stream = metadata.streams?.find(s => s.codec_type === 'video');
       if (!stream) {
         reject(new Error('No video stream found'));
         return;
       }
+      const rawDuration = Number(metadata.format?.duration || stream.duration || 0);
       resolve({
-        duration: metadata.format.duration || 0,
+        duration: Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 0,
         width: stream.width || 0,
         height: stream.height || 0,
       });
@@ -71,6 +73,31 @@ export const transcodeToHls = async (
     throw new Error('Media file not found');
   }
 
+  // Create output directory — must exist before we use it in finally
+  const hlsOutputDir = path.join(UPLOADS_ROOT, 'hls', mediaFile._id.toString());
+  if (!fs.existsSync(hlsOutputDir)) {
+    fs.mkdirSync(hlsOutputDir, { recursive: true });
+  }
+
+  logger.info(`[HLS] Processing started: ${mediaFileId}`);
+  logger.info(`[HLS] HLS directory created: ${hlsOutputDir}`);
+
+  // Pre-flight disk space check
+  const minFreeGb = Number(process.env.MIN_FREE_DISK_GB ?? 2);
+  const diskOk = await checkDiskSpace(UPLOADS_ROOT, minFreeGb);
+  if (!diskOk) {
+    const msg = `[HLS] Insufficient disk space (< ${minFreeGb} GB free). Refusing to start transcode for ${mediaFileId}.`;
+    logger.error(msg);
+    mediaFile.hlsStatus = 'failed';
+    mediaFile.hlsError = msg;
+    await mediaFile.save();
+    // Cleanup the empty dir we just created
+    await safeRemoveDir(hlsOutputDir, mediaFileId);
+    throw new Error(msg);
+  }
+
+  let processingError: Error | null = null;
+
   try {
     // Update status to processing
     mediaFile.hlsStatus = 'processing';
@@ -86,16 +113,11 @@ export const transcodeToHls = async (
       applicablePresets.push(QUALITY_PRESETS[0]);
     }
 
-    // Create output directory
-    const hlsOutputDir = path.join(UPLOADS_ROOT, 'hls', mediaFile._id.toString());
-    if (!fs.existsSync(hlsOutputDir)) {
-      fs.mkdirSync(hlsOutputDir, { recursive: true });
-    }
-
     const qualities: IHlsQuality[] = [];
     const spacesActive = await isS3Configured();
 
     // Transcode each quality
+    logger.info(`[HLS] Transcoding started: ${mediaFileId} (${applicablePresets.length} qualities)`);
     for (const preset of applicablePresets) {
       const outputDir = path.join(hlsOutputDir, preset.quality);
       if (!fs.existsSync(outputDir)) {
@@ -104,7 +126,7 @@ export const transcodeToHls = async (
       const playlistPath = path.join(outputDir, 'index.m3u8');
       const segmentPattern = path.join(outputDir, 'segment-%03d.ts');
 
-      await new Promise((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         ffmpeg(inputFilePath)
           .inputOptions(ffmpegInputOptions(inputFilePath))
           .outputOptions([
@@ -125,17 +147,17 @@ export const transcodeToHls = async (
           ])
           .output(playlistPath)
           .on('start', (commandLine) => {
-            logger.debug({ commandLine }, `Starting HLS transcoding for ${preset.quality}`);
+            logger.debug({ commandLine }, `[HLS] Starting FFmpeg for ${preset.quality}: ${mediaFileId}`);
           })
           .on('progress', (progress) => {
             logger.debug({ percent: progress.percent, preset: preset.quality }, 'HLS transcoding progress');
           })
-          .on('end', async () => {
-            logger.info(`HLS transcoding for ${preset.quality} complete`);
-            resolve(null);
+          .on('end', () => {
+            logger.info(`[HLS] Quality ${preset.quality} completed: ${mediaFileId}`);
+            resolve();
           })
           .on('error', (err, stdout, stderr) => {
-            logger.error({ err, stdout, stderr }, `Error transcoding to ${preset.quality}`);
+            logger.error({ err, stdout, stderr }, `[HLS] Error transcoding ${preset.quality}: ${mediaFileId}`);
             reject(err);
           })
           .run();
@@ -173,21 +195,20 @@ export const transcodeToHls = async (
 
     if (spacesActive) {
       const s3Prefix = `hls/${mediaFile._id.toString()}`;
+      logger.info(`[HLS] Upload to Spaces started: ${mediaFileId}`);
+      // This MUST succeed before we mark completed or delete local files
       await uploadHlsFolderToS3(hlsOutputDir, s3Prefix);
+      logger.info(`[HLS] Upload to Spaces completed: ${mediaFileId}`);
+
       const publicBase = await getHlsPublicBaseUrl();
       masterPlaylistUrl = `${publicBase}/${relativeMasterPlaylistPath}`;
       for (const q of qualities) {
         q.url = `${publicBase}/hls/${mediaFile._id.toString()}/${q.quality}/index.m3u8`;
         q.filePath = q.url;
       }
-      try {
-        fs.rmSync(hlsOutputDir, { recursive: true, force: true });
-      } catch (cleanupErr) {
-        logger.warn({ cleanupErr }, 'Failed to clean local HLS temp folder after Spaces upload');
-      }
     }
 
-    // Update media file with HLS data
+    // Update media file with HLS data — only after successful upload
     mediaFile.isHls = true;
     mediaFile.hlsMasterPlaylistUrl = masterPlaylistUrl;
     mediaFile.hlsMasterPlaylistPath = spacesActive ? masterPlaylistUrl : `/uploads/${relativeMasterPlaylistPath}`;
@@ -195,12 +216,25 @@ export const transcodeToHls = async (
     mediaFile.hlsStatus = 'completed';
     await mediaFile.save();
 
-  } catch (error) {
-    logger.error({ error }, 'Error transcoding to HLS');
+    logger.info(`[HLS] Processing completed: ${mediaFileId}`);
+
+  } catch (error: any) {
+    processingError = error instanceof Error ? error : new Error(String(error));
+    logger.error({ error }, `[HLS] Processing failed: ${mediaFileId}`);
     mediaFile.hlsStatus = 'failed';
-    mediaFile.hlsError = error instanceof Error ? error.message : String(error);
+    mediaFile.hlsError = processingError.message;
     await mediaFile.save();
-    throw error;
+    throw processingError;
+  } finally {
+    // Always clean local HLS files regardless of success or failure.
+    // On success: Spaces is permanent storage, local copy is redundant.
+    // On failure: prevent disk accumulation.
+    const spacesActive = await isS3Configured().catch(() => false);
+    if (spacesActive) {
+      logger.info(`[HLS] Cleaning local files: ${mediaFileId}`);
+      await safeRemoveDir(hlsOutputDir, mediaFileId);
+    }
+    // In local-only mode, keep the files — they ARE the permanent storage.
   }
 };
 

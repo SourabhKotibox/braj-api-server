@@ -7,7 +7,7 @@ import type { FastifyRequest } from 'fastify';
 import { MediaFileModel } from '../models/MediaFile';
 import { MediaFolderModel } from '../models/MediaFolder';
 import { Types } from 'mongoose';
-import { transcodeToHls } from './hlsTranscoder';
+import { transcodeToHls, getVideoInfo } from './hlsTranscoder';
 import { logger } from './logger';
 import { isS3Configured, uploadToS3, deleteFromS3, getS3Settings, normalizeObjectKey } from './s3';
 
@@ -116,6 +116,9 @@ export interface UploadedFileInfo {
   uploadType: UploadType;
   storageType?: 'local' | 's3' | 'spaces';
   s3Key?: string;
+  _id?: any;
+  id?: string;
+  duration?: number;
 }
 
 export const ensureUploadDir = (dirPath: string) => {
@@ -172,39 +175,59 @@ const savePartDirectToSpaces = async (
   const prefix = (targetDir || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   const s3Key = `${prefix ? `${prefix}/` : ''}${fileName}`;
 
-  // Pipe through a PassThrough to count bytes accurately.
-  // Directly reading part.file.bytesRead after upload is unreliable
-  // because the stream is already consumed by the S3 Upload client.
-  let fileSize = 0;
-  const counter = new PassThrough();
-  counter.on('data', (chunk: Buffer) => { fileSize += chunk.length; });
-  part.file.pipe(counter);
+  // If part.tempFilePath is already provided (e.g. from disk streaming), use it.
+  // Otherwise, write stream to a temporary file on disk so we can probe duration and stream to S3.
+  const tempDir = path.join(UPLOADS_ROOT, 'temp');
+  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
+  const tempFilePath = part.tempFilePath || path.join(tempDir, `up_${Date.now()}_${Math.random().toString(36).substring(2, 8)}_${fileName}`);
+  let createdTempFile = false;
+
+  if (!part.tempFilePath) {
+    createdTempFile = true;
+    const ws = fs.createWriteStream(tempFilePath);
+    await new Promise<void>((resolve, reject) => {
+      part.file.pipe(ws);
+      ws.on('finish', resolve);
+      ws.on('error', reject);
+    });
+  }
+
+  const fileSize = fs.existsSync(tempFilePath) ? fs.statSync(tempFilePath).size : Number(part.file?.bytesRead || 0);
+
+  // Probe duration for video files
+  let duration: number | undefined;
+  const isVideo = isVideoFile(part.filename, mimeType);
+  if (isVideo && fs.existsSync(tempFilePath)) {
+    try {
+      const info = await getVideoInfo(tempFilePath);
+      if (info?.duration && Number.isFinite(info.duration) && info.duration > 0) {
+        duration = Math.round(info.duration);
+      }
+    } catch (probeErr) {
+      logger.warn({ probeErr, fileName }, 'Could not probe video duration during upload');
+    }
+  }
+
+  // Upload to S3/Spaces
   let spacesUrl: string;
   try {
-    spacesUrl = await uploadToS3(s3Key, counter, mimeType);
+    const fileStream = fs.createReadStream(tempFilePath);
+    spacesUrl = await uploadToS3(s3Key, fileStream, mimeType);
   } catch (err: any) {
+    if (createdTempFile && fs.existsSync(tempFilePath)) {
+      try { fs.unlinkSync(tempFilePath); } catch {}
+    }
     logger.error({ err, s3Key, mimeType }, 'S3/Spaces upload failed in savePartDirectToSpaces');
     throw new Error(`Upload to storage failed: ${err?.message || String(err)}`);
   }
 
   const storageType = (await getS3Settings()).isSpaces ? 'spaces' : 's3';
 
-  const fileInfo: UploadedFileInfo = {
-    originalName: part.filename,
-    fileName,
-    filePath: spacesUrl,
-    url: spacesUrl,
-    fileSize,
-    mimeType,
-    uploadType,
-    storageType,
-    s3Key,
-  };
-
+  let mediaFileDoc: any = null;
   if (options?.trackInMediaLibrary !== false) {
     try {
-      const mediaFile = await MediaFileModel.create({
+      mediaFileDoc = await MediaFileModel.create({
         name: part.filename,
         url: spacesUrl,
         filePath: spacesUrl,
@@ -217,17 +240,45 @@ const savePartDirectToSpaces = async (
         contentType: options?.contentType,
         storageType,
         s3Key,
+        duration,
       });
 
-      if (isVideoFile(part.filename, mimeType)) {
-        transcodeToHls(mediaFile._id.toString(), spacesUrl, spacesUrl).catch((err) => {
-          logger.error({ err, mediaFileId: mediaFile._id }, 'Failed to transcode video to HLS (Spaces)');
-        });
+      if (isVideo) {
+        // Transcode to HLS using local tempFilePath for high performance and reliability
+        transcodeToHls(mediaFileDoc._id.toString(), tempFilePath, spacesUrl)
+          .catch((err) => {
+            logger.error({ err, mediaFileId: mediaFileDoc._id }, 'Failed to transcode video to HLS (Spaces)');
+          })
+          .finally(() => {
+            if (fs.existsSync(tempFilePath)) {
+              try { fs.unlinkSync(tempFilePath); } catch {}
+            }
+          });
       }
     } catch (error) {
       console.error('Failed to track file in media library:', error);
     }
   }
+
+  // If not a video (not transcoding), clean up temp file if created here
+  if (!isVideo && createdTempFile && fs.existsSync(tempFilePath)) {
+    try { fs.unlinkSync(tempFilePath); } catch {}
+  }
+
+  const fileInfo: UploadedFileInfo = {
+    originalName: part.filename,
+    fileName,
+    filePath: spacesUrl,
+    url: spacesUrl,
+    fileSize,
+    mimeType,
+    uploadType,
+    storageType,
+    s3Key,
+    _id: mediaFileDoc?._id,
+    id: mediaFileDoc?._id?.toString(),
+    duration,
+  };
 
   return fileInfo;
 };
@@ -343,6 +394,19 @@ export const saveFileFromPart = async (
       const host = request.headers.host;
       const baseUrl = `${protocol}://${host}`;
 
+      let duration: number | undefined;
+      const isVideo = isVideoFile(part.filename, part.mimetype || '');
+      if (isVideo && fs.existsSync(fullFilePath)) {
+        try {
+          const info = await getVideoInfo(fullFilePath);
+          if (info?.duration && Number.isFinite(info.duration) && info.duration > 0) {
+            duration = Math.round(info.duration);
+          }
+        } catch (probeErr) {
+          logger.warn({ probeErr, fileName }, 'Could not probe video duration for local file');
+        }
+      }
+
       const fileInfo: UploadedFileInfo = {
         originalName: part.filename,
         fileName,
@@ -351,7 +415,8 @@ export const saveFileFromPart = async (
         fileSize: stats.size,
         mimeType: part.mimetype || 'application/octet-stream',
         uploadType,
-        storageType: 'local'
+        storageType: 'local',
+        duration,
       };
 
       // Local-only fallback. Spaces uploads are handled before this write stream.
@@ -370,10 +435,14 @@ export const saveFileFromPart = async (
             contentHash,
             contentName: options?.contentName,
             contentType: options?.contentType,
-            storageType: fileInfo.storageType
+            storageType: fileInfo.storageType,
+            duration,
           });
 
-          if (isVideoFile(part.filename, part.mimetype || '')) {
+          fileInfo._id = mediaFile._id;
+          fileInfo.id = mediaFile._id.toString();
+
+          if (isVideo) {
             transcodeToHls(mediaFile._id.toString(), fullFilePath, baseUrl).catch(err => {
               logger.error({ err, mediaFileId: mediaFile._id }, 'Failed to transcode video to HLS (local)');
             });
